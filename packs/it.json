@@ -1,0 +1,30 @@
+{
+  "meta": {
+    "id": "it",
+    "name": "Italiano",
+    "version": 1,
+    "symbol": "IT"
+  },
+  "diacritics": [
+    {
+      "name": "acute",
+      "combining": "\u0301",
+      "triggers": ["1"],
+      "bases": ["e", "i", "o", "u"]
+    },
+    {
+      "name": "grave",
+      "combining": "\u0300",
+      "triggers": ["2"],
+      "bases": ["a", "e", "i", "o", "u"]
+    },
+    {
+      "name": "circumflex",
+      "combining": "\u0302",
+      "triggers": ["6"],
+      "bases": ["i"]
+    }
+  ],
+  "rules": {},
+  "upper": {}
+}

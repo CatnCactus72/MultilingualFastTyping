@@ -1,0 +1,22 @@
+{
+  "meta": {
+    "id": "de",
+    "name": "Deutsch",
+    "version": 1,
+    "symbol": "DE"
+  },
+  "diacritics": [
+    {
+      "name": "diaeresis",
+      "combining": "\u0308",
+      "triggers": ["3"],
+      "bases": ["a", "o", "u"]
+    }
+  ],
+  "rules": {
+    "ß": ["sz", "s4"]
+  },
+  "upper": {
+    "ß": "ẞ"
+  }
+}

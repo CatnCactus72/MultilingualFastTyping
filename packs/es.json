@@ -1,0 +1,33 @@
+{
+  "meta": {
+    "id": "es",
+    "name": "Español",
+    "version": 1,
+    "symbol": "ES"
+  },
+  "diacritics": [
+    {
+      "name": "acute",
+      "combining": "\u0301",
+      "triggers": ["1"],
+      "bases": ["a", "e", "i", "o", "u"]
+    },
+    {
+      "name": "diaeresis",
+      "combining": "\u0308",
+      "triggers": ["3"],
+      "bases": ["u"]
+    },
+    {
+      "name": "tilde",
+      "combining": "\u0303",
+      "triggers": ["4"],
+      "bases": ["n"]
+    }
+  ],
+  "rules": {
+    "¿": "??",
+    "¡": "!!"
+  },
+  "upper": {}
+}
