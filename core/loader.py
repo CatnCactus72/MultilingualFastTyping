@@ -1,234 +1,282 @@
 # core/loader.py
-from dataclasses import dataclass, field
 import json
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
-import unicodedata
-
-PUNCTUATION_WARN_CHARS = set(":;,.!?'")
-
-
-@dataclass
-class ValidationIssue:
-  level: str  # "ERROR" hoặc "WARNING"
-  kind: str
-  message: str
+from typing import Any, Dict, List, Optional, Set, Tuple, Union
+from core.conflicts.framework import ValidationIssue
+from core.conflicts.generic_rules import validate_generic_rules
+from core.layers.unicode_utils import normalize_text
+from core.registry import get_composer_class
 
 
 @dataclass
 class LanguagePack:
-  pack_id: str
-  name: str
-  version: int
-  symbol: str
-  trigger_map: Dict[str, str] = field(default_factory=dict)
-  upper_map: Dict[str, str] = field(default_factory=dict)
-  max_trigger_len: int = 0
+    id: str
+    name: str
+    version: int = 1
+    symbol: str = ""
+    badge: Dict[str, str] = field(default_factory=dict)
+    script: str = "latn"
+    composer: str = "mapping"
+    direction: str = "ltr"
+    stage: int = 1
+    schema: int = 1
+    normalization: str = "NFC"
+    word_boundaries: List[str] = field(default_factory=list)
+    raw_rules: Dict[str, List[str]] = field(default_factory=dict)
+    diacritics: List[Dict[str, Any]] = field(default_factory=list)
+    trigger_map: Dict[str, str] = field(default_factory=dict)
+    upper_map: Dict[str, str] = field(default_factory=dict)
+    max_trigger_len: int = 1
+    trigger_chars: Set[str] = field(default_factory=set)
+    # Dành cho cơ chế B (Tiếng Việt) và các giai đoạn sau
+    options: Dict[str, Any] = field(default_factory=dict)
+    bindings: List[Dict[str, Any]] = field(default_factory=list)
 
 
-class PackValidationError(Exception):
-
-  def __init__(self, issues: List[ValidationIssue]):
-    self.issues = issues
-    super().__init__(
-        "Gói ngôn ngữ có lỗi xung đột: "
-        + "; ".join(i.message for i in issues if i.level == "ERROR")
-    )
+def _normalize_triggers_list(val: Union[str, List[str]]) -> List[str]:
+    if isinstance(val, str):
+        return [val]
+    if isinstance(val, list):
+        return [str(x) for x in val]
+    return []
 
 
-def _is_printable_ascii_no_space(s: str) -> bool:
-  return bool(s) and all(33 <= ord(ch) <= 126 for ch in s)
+def expand_diacritics_to_rules(
+    diacritics: List[Dict[str, Any]],
+    normalization: str = "NFC",
+) -> Dict[str, List[str]]:
+    """Mở rộng nhóm dấu kết hợp (base + combining) thành quy tắc chuẩn hóa NFC (Mục 4.2)."""
+    expanded: Dict[str, List[str]] = {}
+    for group in diacritics:
+        combining = group.get("combining", "")
+        triggers = _normalize_triggers_list(group.get("triggers", []))
+        bases = group.get("bases") or group.get("vowels") or []
+        if not combining or not triggers or not bases:
+            continue
+        for base in bases:
+            composed = normalize_text(f"{base}{combining}", normalization)
+            out_trigs = expanded.setdefault(composed, [])
+            for t in triggers:
+                trig_str = f"{base}{t}".lower()
+                if trig_str not in out_trigs:
+                    out_trigs.append(trig_str)
+    return expanded
 
 
-def _expand_diacritics(
-    diacritics_list: List[dict], raw_rules: Dict[str, List[str]]
-) -> None:
-  """Mở rộng nhóm quy tắc dấu (combining marks) thành các cặp trigger -> ký tự NFC."""
-  for item in diacritics_list:
-    combining = item.get("combining", "")
-    triggers = item.get("triggers", [])
-    bases = item.get("bases", [])
-    if isinstance(triggers, str):
-      triggers = [triggers]
+def merge_pack_layers(
+    script_data: Optional[Dict[str, Any]],
+    manifest_data: Optional[Dict[str, Any]],
+    pack_data: Dict[str, Any],
+    override_data: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Hợp nhất 3 tầng dữ liệu: Hồ sơ hệ chữ (scripts/) -> Gói ngôn ngữ (languages/) -> Ghi đè (overrides/)."""
+    script_data = script_data or {}
+    manifest_data = manifest_data or {}
+    override_data = override_data or {}
 
-    for base in bases:
-      composed = unicodedata.normalize("NFC", base + combining)
-      # Bỏ qua nếu ký tự không kết hợp được thành ký tự đơn hoặc chuỗi hợp lệ
-      if composed == base:
-        continue
-      generated_trigs = [f"{base}{t}" for t in triggers]
-      if composed in raw_rules:
-        for gt in generated_trigs:
-          if gt not in raw_rules[composed]:
-            raw_rules[composed].append(gt)
-      else:
-        raw_rules[composed] = generated_trigs
+    meta = pack_data.get("meta", {})
+    pack_id = manifest_data.get("id") or pack_data.get("id") or meta.get("id", "unknown")
+    name = manifest_data.get("name") or pack_data.get("name") or meta.get("name", pack_id)
+    # symbol = (
+    #     manifest_data.get("badge", {}).get("label")
+    #     or meta.get("symbol")
+    #     or pack_id.upper()[:2]
+    # )
+    # badge = manifest_data.get("badge") or {
+    #     "label": symbol,
+    #     "color": "#1565c0",
+    # }
+    raw_badge = manifest_data.get("badge")
+    if isinstance(raw_badge, str):
+        symbol = raw_badge
+        badge = {"label": symbol}
+    elif isinstance(raw_badge, dict):
+        symbol = raw_badge.get("label") or meta.get("symbol") or pack_id.upper()[:3]
+        badge = {"label": symbol}
+    else:
+        symbol = meta.get("symbol") or pack_id.upper()[:3]
+        badge = {"label": symbol}
+        
+    # Hợp nhất diacritics
+    diacritics = list(script_data.get("diacritics", []))
+    if "diacritics" in pack_data:
+        diacritics = list(pack_data["diacritics"])
+    if "diacritics" in override_data:
+        diacritics = list(override_data["diacritics"])
 
+    # Hợp nhất rules
+    rules: Dict[str, Union[str, List[str]]] = {}
+    for src in (script_data.get("rules", {}), pack_data.get("rules", {})):
+        for k, v in src.items():
+            rules[k] = _normalize_triggers_list(v)
 
-def validate_raw_rules(
-    rules_dict: Dict[str, List[str]],
-) -> List[ValidationIssue]:
-  """Kiểm tra xung đột theo mục 4.4 (FR-16)."""
-  issues: List[ValidationIssue] = []
-  seen_triggers: Dict[str, str] = {}
+    # Áp dụng disable từ override
+    disabled = set(override_data.get("disable", []))
+    for dis_key in disabled:
+        rules.pop(dis_key, None)
 
-  for raw_output, triggers in rules_dict.items():
-    output = unicodedata.normalize("NFC", raw_output)
-    if not output:
-      issues.append(
-          ValidationIssue("ERROR", "EMPTY_OUTPUT", "Đầu ra không được rỗng.")
-      )
-      continue
+    # Áp dụng rules ghi đè
+    for k, v in override_data.get("rules", {}).items():
+        rules[k] = _normalize_triggers_list(v)
 
-    if isinstance(triggers, str):
-      triggers = [triggers]
+    # Hợp nhất upper
+    upper: Dict[str, str] = {}
+    for src in (
+        script_data.get("upper", {}),
+        pack_data.get("upper", {}),
+        override_data.get("upper", {}),
+    ):
+        upper.update(src)
 
-    for trig in triggers:
-      if not _is_printable_ascii_no_space(trig):
-        issues.append(
-            ValidationIssue(
-                "ERROR",
-                "INVALID_TRIGGER",
-                f"Trigger '{trig}' của '{output}' rỗng, chứa khoảng trắng hoặc ký tự không phải ASCII in được.",
-            )
-        )
-        continue
+    # Hợp nhất options & bindings (cho composer kiểu vietnamese)
+    options = dict(pack_data.get("options", {}))
+    options.update(override_data.get("options", {}))
 
-      if output == trig:
-        issues.append(
-            ValidationIssue(
-                "ERROR",
-                "IDENTICAL_OUTPUT",
-                f"Đầu ra '{output}' trùng đúng với trigger '{trig}'.",
-            )
-        )
-        continue
+    bindings = override_data.get("bindings", pack_data.get("bindings", []))
 
-      trig_lower = trig.lower()
-
-      if trig_lower in seen_triggers:
-        prev_out = seen_triggers[trig_lower]
-        issues.append(
-            ValidationIssue(
-                "ERROR",
-                "DUPLICATE_TRIGGER",
-                f"Trùng trigger '{trig}' giữa '{prev_out}' và '{output}'.",
-            )
-        )
-      else:
-        seen_triggers[trig_lower] = output
-
-      if len(trig) == 1:
-        issues.append(
-            ValidationIssue(
-                "WARNING",
-                "SINGLE_CHAR_TRIGGER",
-                f"Trigger '{trig}' → '{output}' chỉ dài 1 ký tự; mọi lần gõ phím đó đều bị thay.",
-            )
-        )
-
-      if len(trig) >= 2 and trig[-1] in PUNCTUATION_WARN_CHARS:
-        issues.append(
-            ValidationIssue(
-                "WARNING",
-                "TRAILING_PUNCTUATION",
-                f"Trigger '{trig}' → '{output}' kết thúc bằng dấu câu '{trig[-1]}' thường đứng sau chữ.",
-            )
-        )
-
-  all_triggers = list(seen_triggers.keys())
-  for t1 in all_triggers:
-    for t2 in all_triggers:
-      if t1 != t2 and t2.startswith(t1):
-        issues.append(
-            ValidationIssue(
-                "WARNING",
-                "DEAD_RULE_PREFIX",
-                f"Trigger '{t1}' ('{seen_triggers[t1]}') là tiền tố của '{t2}' ('{seen_triggers[t2]}'); quy tắc '{t2}' sẽ không bao giờ chạy.",
-            )
-        )
-
-  return issues
+    return {
+        "id": pack_id,
+        "name": name,
+        "version": meta.get("version", 1),
+        "symbol": symbol,
+        "badge": badge,
+        "script": manifest_data.get("script", script_data.get("script", "latn")),
+        "composer": manifest_data.get("composer", pack_data.get("composer", "mapping")),
+        "direction": manifest_data.get("direction", "ltr"),
+        "stage": manifest_data.get("stage", 1),
+        "schema": manifest_data.get("schema", pack_data.get("schema", 1)),
+        "normalization": script_data.get("normalization", "NFC"),
+        "word_boundaries": script_data.get("word_boundaries", []),
+        "diacritics": diacritics,
+        "rules": rules,
+        "disable": list(disabled),
+        "upper": upper,
+        "options": options,
+        "bindings": bindings,
+    }
 
 
 def build_pack_from_dict(
-    base_data: dict, override_data: Optional[dict] = None
+    data: Dict[str, Any],
+    override_data: Optional[Dict[str, Any]] = None,
+    script_data: Optional[Dict[str, Any]] = None,
+    manifest_data: Optional[Dict[str, Any]] = None,
 ) -> Tuple[LanguagePack, List[ValidationIssue]]:
-  """Gộp gói gốc (diacritics + rules) và file ghi đè (FR-18), kiểm tra xung đột."""
-  meta = base_data.get("meta", {})
-  raw_rules: Dict[str, List[str]] = {}
+    merged = merge_pack_layers(script_data, manifest_data, data, override_data)
+    norm_form = merged.get("normalization", "NFC")
+    disabled_set = set(merged.get("disable", []))
 
-  # 1. Mở rộng nhóm dấu (diacritics) trước
-  if "diacritics" in base_data:
-    _expand_diacritics(base_data["diacritics"], raw_rules)
+    # 1. Mở rộng diacritics
+    combined_rules: Dict[str, List[str]] = expand_diacritics_to_rules(
+        merged.get("diacritics", []), norm_form
+    )
+    for dis in disabled_set:
+        combined_rules.pop(normalize_text(dis, norm_form), None)
 
-  # 2. Nạp các quy tắc rời (rules)
-  for out, trigs in base_data.get("rules", {}).items():
-    norm_out = unicodedata.normalize("NFC", out)
-    trig_list = [trigs] if isinstance(trigs, str) else list(trigs)
-    if norm_out in raw_rules:
-      for t in trig_list:
-        if t not in raw_rules[norm_out]:
-          raw_rules[norm_out].append(t)
+    # 2. Gộp với rules trực tiếp (nếu override định nghĩa lại ký tự trong diacritics thì thay thế)
+    raw_rules_input = merged.get("rules", {})
+    override_rules_keys = set((override_data or {}).get("rules", {}).keys())
+
+    for out_char, trigs in raw_rules_input.items():
+        norm_out = normalize_text(out_char, norm_form)
+        norm_trigs = [normalize_text(t, norm_form).lower() for t in _normalize_triggers_list(trigs)]
+        if norm_out in override_rules_keys or norm_out not in combined_rules:
+            combined_rules[norm_out] = norm_trigs
+        else:
+            existing = combined_rules[norm_out]
+            for t in norm_trigs:
+                if t not in existing:
+                    existing.append(t)
+
+    upper_map = {
+        normalize_text(k, norm_form): normalize_text(v, norm_form)
+        for k, v in merged.get("upper", {}).items()
+    }
+
+    # 3. Kiểm tra xung đột
+    composer_name = merged.get("composer", "mapping")
+    issues: List[ValidationIssue] = []
+
+    if composer_name in ("mapping", "rules"):
+        issues.extend(validate_generic_rules(combined_rules))
     else:
-      raw_rules[norm_out] = trig_list
+        try:
+            comp_cls = get_composer_class(composer_name)
+            comp_instance = comp_cls(merged)
+            issues.extend(comp_instance.validate_pack(merged))
+        except KeyError:
+            pass
 
-  upper_map: Dict[str, str] = {
-      unicodedata.normalize("NFC", k): unicodedata.normalize("NFC", v)
-      for k, v in base_data.get("upper", {}).items()
-  }
+    # 4. Xây dựng trigger_map (chỉ nạp các quy tắc hợp lệ không bị lỗi G-01/G-03)
+    error_triggers = {
+        iss.context for iss in issues if iss.level == "ERROR" and iss.context
+    }
+    trigger_map: Dict[str, str] = {}
+    max_len = 1
+    trigger_chars: Set[str] = set()
 
-  # 3. Áp dụng file ghi đè của người dùng (FR-18)
-  if override_data:
-    for disabled_out in override_data.get("disable", []):
-      norm_dis = unicodedata.normalize("NFC", disabled_out)
-      raw_rules.pop(norm_dis, None)
+    for out_char, trigs in combined_rules.items():
+        for trig in trigs:
+            if not trig or trig in error_triggers:
+                continue
+            if trig not in trigger_map:
+                trigger_map[trig] = out_char
+                max_len = max(max_len, len(trig))
+                trigger_chars.update(trig)
 
-    if "diacritics" in override_data:
-      _expand_diacritics(override_data["diacritics"], raw_rules)
-
-    for out, trigs in override_data.get("rules", {}).items():
-      norm_out = unicodedata.normalize("NFC", out)
-      raw_rules[norm_out] = [trigs] if isinstance(trigs, str) else list(trigs)
-
-    for k, v in override_data.get("upper", {}).items():
-      upper_map[unicodedata.normalize("NFC", k)] = unicodedata.normalize(
-          "NFC", v
-      )
-
-  issues = validate_raw_rules(raw_rules)
-  errors = [i for i in issues if i.level == "ERROR"]
-  if errors:
-    raise PackValidationError(issues)
-
-  trigger_map: Dict[str, str] = {}
-  max_len = 0
-  for out, trigs in raw_rules.items():
-    for t in trigs:
-      t_low = t.lower()
-      trigger_map[t_low] = out
-      if len(t_low) > max_len:
-        max_len = len(t_low)
-
-  pack = LanguagePack(
-      pack_id=meta.get("id", "unknown"),
-      name=meta.get("name", "Unknown"),
-      version=meta.get("version", 1),
-      symbol=meta.get("symbol", "??"),
-      trigger_map=trigger_map,
-      upper_map=upper_map,
-      max_trigger_len=max_len,
-  )
-  return pack, issues
+    pack = LanguagePack(
+        id=merged["id"],
+        name=merged["name"],
+        version=merged["version"],
+        symbol=merged["symbol"],
+        badge=merged["badge"],
+        script=merged["script"],
+        composer=composer_name,
+        direction=merged["direction"],
+        stage=merged["stage"],
+        schema=merged["schema"],
+        normalization=norm_form,
+        word_boundaries=merged["word_boundaries"],
+        raw_rules=combined_rules,
+        diacritics=merged.get("diacritics", []),
+        trigger_map=trigger_map,
+        upper_map=upper_map,
+        max_trigger_len=max_len,
+        trigger_chars=trigger_chars,
+        options=merged.get("options", {}),
+        bindings=merged.get("bindings", []),
+    )
+    return pack, issues
 
 
 def load_pack_files(
-    base_path: Path, override_path: Optional[Path] = None
+    base_path: Path,
+    override_path: Optional[Path] = None,
+    manifest_path: Optional[Path] = None,
+    script_path: Optional[Path] = None,
 ) -> Tuple[LanguagePack, List[ValidationIssue]]:
-  with open(base_path, "r", encoding="utf-8") as f:
-    base_data = json.load(f)
-  override_data = None
-  if override_path and override_path.exists():
-    with open(override_path, "r", encoding="utf-8") as f:
-      override_data = json.load(f)
-  return build_pack_from_dict(base_data, override_data)
+    with open(base_path, "r", encoding="utf-8") as f:
+        base_data = json.load(f)
+
+    override_data = None
+    if override_path and override_path.exists():
+        with open(override_path, "r", encoding="utf-8") as f:
+            override_data = json.load(f)
+
+    manifest_data = None
+    if manifest_path and manifest_path.exists():
+        with open(manifest_path, "r", encoding="utf-8") as f:
+            manifest_data = json.load(f)
+
+    script_data = None
+    if script_path and script_path.exists():
+        with open(script_path, "r", encoding="utf-8") as f:
+            script_data = json.load(f)
+
+    return build_pack_from_dict(
+        base_data,
+        override_data=override_data,
+        script_data=script_data,
+        manifest_data=manifest_data,
+    )

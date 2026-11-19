@@ -1,0 +1,1 @@
+from languages.vi.vi_vni.composer import ViVniComposer  # noqa: F401

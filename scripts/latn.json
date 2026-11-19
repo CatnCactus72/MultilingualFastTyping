@@ -1,0 +1,9 @@
+{
+  "script": "latn",
+  "name": "Latin",
+  "normalization": "NFC",
+  "word_boundaries": [" ", "\t", "\n", ".", ",", ";", ":", "!", "?", "(", ")", "[", "]", "{", "}", "\"", "'"],
+  "diacritics": [],
+  "rules": {},
+  "upper": {}
+}

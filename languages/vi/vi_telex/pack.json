@@ -1,0 +1,21 @@
+{
+  "id": "vi_telex",
+  "composer": "vi_telex",
+  "schema": 1,
+  "options": {
+    "tone_style": "modern",
+    "validate": "strict",
+    "restore_invalid": true
+  },
+  "bindings": {
+    "TONE_SAC": "s",
+    "TONE_HUYEN": "f",
+    "TONE_HOI": "r",
+    "TONE_NGA": "x",
+    "TONE_NANG": "j",
+    "TONE_CLEAR": "z",
+    "MARK_HORN_BREVE": "w",
+    "REPEAT_CIRC": ["a", "e", "o"],
+    "REPEAT_STROKE": ["d"]
+  }
+}

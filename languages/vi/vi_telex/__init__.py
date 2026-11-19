@@ -1,0 +1,1 @@
+from languages.vi.vi_telex.composer import ViTelexComposer  # noqa: F401

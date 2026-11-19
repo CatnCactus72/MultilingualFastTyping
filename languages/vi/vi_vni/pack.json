@@ -1,0 +1,22 @@
+{
+  "id": "vi_vni",
+  "composer": "vi_vni",
+  "schema": 1,
+  "options": {
+    "tone_style": "modern",
+    "validate": "strict",
+    "restore_invalid": true
+  },
+  "bindings": {
+    "TONE_SAC": "1",
+    "TONE_HUYEN": "2",
+    "TONE_HOI": "3",
+    "TONE_NGA": "4",
+    "TONE_NANG": "5",
+    "TONE_CLEAR": "0",
+    "MARK_CIRC": "6",
+    "MARK_HORN": "7",
+    "MARK_BREVE": "8",
+    "STROKE_D": "9"
+  }
+}

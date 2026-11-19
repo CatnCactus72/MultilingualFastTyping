@@ -1,0 +1,11 @@
+{
+  "id": "it",
+  "name": "Italiano",
+  "script": "latn",
+  "composer": "mapping",
+  "direction": "ltr",
+  "stage": 1,
+  "badge": { "label": "ITA" },
+  "pack": "pack.json",
+  "schema": 1
+}

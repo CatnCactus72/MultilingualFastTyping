@@ -1,0 +1,11 @@
+{
+  "id": "fr",
+  "name": "Français",
+  "script": "latn",
+  "composer": "mapping",
+  "direction": "ltr",
+  "stage": 1,
+  "badge": { "label": "FRA" },
+  "pack": "pack.json",
+  "schema": 1
+}

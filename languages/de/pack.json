@@ -10,7 +10,7 @@
       "name": "diaeresis",
       "combining": "\u0308",
       "triggers": ["3"],
-      "bases": ["a", "o", "u"]
+      "bases": ["a", "o", "u", "e"]
     }
   ],
   "rules": {

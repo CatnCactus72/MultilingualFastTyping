@@ -1,0 +1,11 @@
+{
+  "id": "vi_vni",
+  "name": "Tiếng Việt (VNI)",
+  "script": "latn",
+  "composer": "vi_vni",
+  "direction": "ltr",
+  "stage": 2,
+  "badge": { "label": "VNI" },
+  "pack": "pack.json",
+  "schema": 1
+}

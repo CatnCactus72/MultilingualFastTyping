@@ -127,8 +127,8 @@ def parse_hotkey(hotkey_str: str) -> Optional[Tuple[int, str]]:
 #       if parsed is not None:
 #         cls._hotkey_map[parsed] = pack_id
 #     # Cập nhật lại gói đang bật nếu có
-#     if cls._core.active_pack is not None:
-#       active_id = cls._core.active_pack.pack_id
+#     if cls._core.pack is not None:
+#       active_id = cls._core.pack.id
 #       cls._core.set_pack(cls._pack_manager.packs.get(active_id))
 #     cls._last_config_mtime = cls._get_config_mtime()
 
@@ -213,27 +213,27 @@ def parse_hotkey(hotkey_str: str) -> Optional[Tuple[int, str]]:
 
 #     # 5. Kiểm tra phím ngắt (Bước 2 thuật toán)
 #     if keyval in BREAK_KEYVALS:
-#       self._core.process_event(KeyEvent(is_break_key=True))
+#       self._core.process_event(ResetEvent(reason="non_printable"))
 #       return False
 
 #     # 6. Chuyển mã phím IBus sang ký tự Unicode in được
 #     cp = IBus.keyval_to_unicode(keyval)
 #     if isinstance(cp, int):
 #         if cp == 0:
-#             self._core.process_event(KeyEvent(is_break_key=True))
+#             self._core.process_event(ResetEvent(reason="non_printable"))
 #             return False
 #         ch = chr(cp)
 #     elif isinstance(cp, str):
 #         if not cp or cp == "\x00":
-#             self._core.process_event(KeyEvent(is_break_key=True))
+#             self._core.process_event(ResetEvent(reason="non_printable"))
 #             return False
 #         ch = cp
 #     else:
-#         self._core.process_event(KeyEvent(is_break_key=True))
+#         self._core.process_event(ResetEvent(reason="non_printable"))
 #         return False
 
 #     if not ch.isprintable():
-#         self._core.process_event(KeyEvent(is_break_key=True))
+#         self._core.process_event(ResetEvent(reason="non_printable"))
 #         return False
 
 #     # Xác định chữ hoa theo đúng D-10 (do OS gửi hoặc tổng hợp Shift ^ CapsLock)
@@ -275,9 +275,9 @@ def parse_hotkey(hotkey_str: str) -> Optional[Tuple[int, str]]:
 #     return False  # Trả về False để GLib chỉ chạy timer này đúng 1 lần
   
 #   def _toggle_language_pack(self, pack_id: str) -> None:
-#     current = self._core.active_pack
+#     current = self._core.pack
 #     # Nhấn lại đúng phím đang bật -> Về bộ gõ mặc định (FR-19)
-#     if current is not None and current.pack_id == pack_id:
+#     if current is not None and current.id == pack_id:
 #       self._core.set_pack(None)
 #       self._notify("Bộ gõ mặc định (EN)", "Đã tắt biến đổi ký tự")
 #       return
@@ -326,8 +326,8 @@ class FastTypeIBusEngine(IBus.Engine):
     mtimes = [0.0]
     if cls._pack_manager.settings_path.exists():
       mtimes.append(cls._pack_manager.settings_path.stat().st_mtime)
-    if cls._pack_manager.user_dir.exists():
-      for p in cls._pack_manager.user_dir.glob("*.json"):
+    if cls._pack_manager.overrides_dir.exists():
+      for p in cls._pack_manager.overrides_dir.glob("*.json"):
         mtimes.append(p.stat().st_mtime)
     return max(mtimes)
 
@@ -348,8 +348,8 @@ class FastTypeIBusEngine(IBus.Engine):
       if parsed is not None:
         cls._hotkey_map[parsed] = pack_id
 
-    if cls._core.active_pack is not None:
-      active_id = cls._core.active_pack.pack_id
+    if cls._core.pack is not None:
+      active_id = cls._core.pack.id
       cls._core.set_pack(cls._pack_manager.packs.get(active_id))
     cls._last_config_mtime = cls._get_config_mtime()
 
@@ -366,7 +366,7 @@ class FastTypeIBusEngine(IBus.Engine):
 
   @classmethod
   def save_state_to_disk(cls) -> None:
-    active_id = cls._core.active_pack.pack_id if cls._core.active_pack else None
+    active_id = cls._core.pack.id if cls._core.pack else None
     cls._pack_manager.save_state({
         "active_pack": active_id,
         "paused": cls._paused,
@@ -436,9 +436,9 @@ class FastTypeIBusEngine(IBus.Engine):
     if self._paused:
       symbol = "||"
       label_str = "Trạng thái: Đang tạm dừng (Click để tiếp tục)"
-    elif self._core.active_pack is not None:
-      symbol = self._core.active_pack.symbol
-      label_str = f"Đang bật: [{symbol}] {self._core.active_pack.name}"
+    elif self._core.pack is not None:
+      symbol = self._core.pack.symbol
+      label_str = f"Đang bật: [{symbol}] {self._core.pack.name}"
     else:
       symbol = "EN"
       label_str = "Đang bật: [EN] Bộ gõ mặc định"
@@ -527,7 +527,7 @@ class FastTypeIBusEngine(IBus.Engine):
       self._toggle_language_pack(target_pack_id)
       return True
 
-    # 4. Kiểm tra phím kèm Ctrl / Alt / Super thông thường
+    # 4. Phím kèm Ctrl / Alt / Super -> reset bộ đệm
     has_non_shift_mod = bool(
         state
         & (
@@ -537,32 +537,47 @@ class FastTypeIBusEngine(IBus.Engine):
         )
     )
     if has_non_shift_mod:
-      self._core.process_event(KeyEvent(has_modifier=True))
+      self._core.process_event(ResetEvent(reason="modifier"))
       return False
 
-    # 5. Kiểm tra phím ngắt
+    # 5. Phím BackSpace -> để composer xử lý xóa theo ô (dời lại dấu thanh tiếng Việt nếu cần)
+    if keyval == IBus.KEY_BackSpace:
+      action = self._core.backspace()
+      if isinstance(action, Replace):
+        self._apply_replacement(action.delete_n, action.text)
+        return True
+      return False
+
+    # Các phím ngắt khác (Space, Enter, Tab, Arrow...)
     if keyval in BREAK_KEYVALS:
-      self._core.process_event(KeyEvent(is_break_key=True))
+      if keyval == IBus.KEY_space:
+        # Gửi ký tự ' ' để tiếng Việt kích hoạt khôi phục từ sai (restore_invalid) nếu có
+        action = self._core.process_event(KeyEvent(char=" ", keyval=keyval, is_upper=False, is_printable=True))
+        if isinstance(action, Replace):
+          self._apply_replacement(action.delete_n, action.text)
+          return True
+        return False
+      self._core.process_event(ResetEvent(reason="break_key"))
       return False
 
     # 6. Chuyển mã phím IBus sang ký tự Unicode in được
     cp = IBus.keyval_to_unicode(keyval)
     if isinstance(cp, int):
       if cp == 0:
-        self._core.process_event(KeyEvent(is_break_key=True))
+        self._core.process_event(ResetEvent(reason="non_printable"))
         return False
       ch = chr(cp)
     elif isinstance(cp, str):
       if not cp or cp == "\x00":
-        self._core.process_event(KeyEvent(is_break_key=True))
+        self._core.process_event(ResetEvent(reason="non_printable"))
         return False
       ch = cp
     else:
-      self._core.process_event(KeyEvent(is_break_key=True))
+      self._core.process_event(ResetEvent(reason="non_printable"))
       return False
 
     if not ch.isprintable():
-      self._core.process_event(KeyEvent(is_break_key=True))
+      self._core.process_event(ResetEvent(reason="non_printable"))
       return False
 
     is_upper = ch.isupper()
@@ -594,8 +609,8 @@ class FastTypeIBusEngine(IBus.Engine):
       self.commit_text(IBus.Text.new_from_string(text))
 
   def _toggle_language_pack(self, pack_id: str) -> None:
-    current = self._core.active_pack
-    if current is not None and current.pack_id == pack_id:
+    current = self._core.pack
+    if current is not None and current.id == pack_id:
       self._core.set_pack(None)
       self.save_state_to_disk()
       self._update_ibus_panel_properties()

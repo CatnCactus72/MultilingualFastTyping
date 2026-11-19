@@ -30,24 +30,23 @@ except (ValueError, ImportError):
   except (ValueError, ImportError):
     INDICATOR_LIB = None
 
-from core.pack_manager import PACK_COLORS, PackManager
+from core.pack_manager import DEFAULT_BADGE_COLOR, PackManager
 
-
-def generate_badge_svg(icon_dir: Path, symbol: str, bg_color: str) -> Path:
-  """Tạo file icon SVG vuông bo góc có màu riêng và ký hiệu 2 chữ (Mục 4.7)."""
-  icon_dir.mkdir(parents=True, exist_ok=True)
-  safe_name = symbol.replace("|", "P")
-  svg_path = icon_dir / f"badge_{safe_name}.svg"
-  svg_content = f"""<?xml version="1.0" encoding="UTF-8"?>
+def generate_badge_svg(icon_dir: Path, symbol: str, bg_color: str = DEFAULT_BADGE_COLOR) -> Path:
+    icon_dir.mkdir(parents=True, exist_ok=True)
+    safe_name = symbol.replace("|", "P")
+    svg_path = icon_dir / f"badge_{safe_name}.svg"
+    font_size = 21 if len(symbol) >= 3 else 28
+    svg_content = f"""<?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
   <rect x="4" y="4" width="56" height="56" rx="12" ry="12" fill="{bg_color}"/>
-  <text x="32" y="42" font-family="sans-serif" font-size="28" font-weight="bold"
+  <text x="32" y="40" font-family="sans-serif" font-size="{font_size}" font-weight="bold"
         fill="#ffffff" text-anchor="middle">{symbol}</text>
 </svg>
 """
-  with open(svg_path, "w", encoding="utf-8") as f:
-    f.write(svg_content)
-  return svg_path
+    with open(svg_path, "w", encoding="utf-8") as f:
+        f.write(svg_content)
+    return svg_path
 
 
 class FastTypeTray:
@@ -69,17 +68,16 @@ class FastTypeTray:
     if INDICATOR_LIB is not None:
       self.indicator = AppIndicator3.Indicator.new(
           "multilingual-fasttype-tray",
-          str(self.icon_dir / "badge_EN.svg"),
+          str(self.icon_dir / "badge_ENG.svg"),
           AppIndicator3.IndicatorCategory.APPLICATION_STATUS,
       )
       self.indicator.set_status(AppIndicator3.IndicatorStatus.ACTIVE)
       self.indicator.set_menu(self.menu)
       self.status_icon = None
     else:
-      # Fallback sang Gtk.StatusIcon nếu hệ thống chưa cài gir1.2-ayatanaappindicator3-0.1
       self.indicator = None
       self.status_icon = Gtk.StatusIcon()
-      self.status_icon.set_from_file(str(self.icon_dir / "badge_EN.svg"))
+      self.status_icon.set_from_file(str(self.icon_dir / "badge_ENG.svg"))
       self.status_icon.connect("popup-menu", self._on_status_icon_popup)
 
     self._sync_from_disk(force=True)
@@ -87,17 +85,16 @@ class FastTypeTray:
     GLib.timeout_add(300, self._poll_changes)
 
   def _pregenerate_icons(self) -> None:
-    generate_badge_svg(self.icon_dir, "EN", PACK_COLORS["EN"])
-    generate_badge_svg(self.icon_dir, "||", PACK_COLORS["PAUSED"])
+    generate_badge_svg(self.icon_dir, "ENG", DEFAULT_BADGE_COLOR)
+    generate_badge_svg(self.icon_dir, "||", DEFAULT_BADGE_COLOR)
     for pid, pack in self.manager.packs.items():
-      color = PACK_COLORS.get(pid, "#1565c0")
-      generate_badge_svg(self.icon_dir, pack.symbol, color)
+      generate_badge_svg(self.icon_dir, pack.symbol, DEFAULT_BADGE_COLOR)
 
   def _build_menu(self) -> Gtk.Menu:
     menu = Gtk.Menu()
 
     # 1. Bộ gõ mặc định (EN)
-    self.item_default = Gtk.CheckMenuItem(label="[EN] Bộ gõ mặc định")
+    self.item_default = Gtk.CheckMenuItem(label="[ENG] Bộ gõ mặc định")
     self.item_default.connect("toggled", self._on_select_pack, None)
     menu.append(self.item_default)
 
@@ -216,8 +213,8 @@ class FastTypeTray:
       icon_file = self.icon_dir / f"badge_{sym}.svg"
       title = f"Multilingual FastType: [{sym}]"
     else:
-      icon_file = self.icon_dir / "badge_EN.svg"
-      title = "Multilingual FastType: [EN]"
+      icon_file = self.icon_dir / "badge_ENG.svg"
+      title = "Multilingual FastType: [ENG]"
 
     if self.indicator is not None:
       self.indicator.set_icon_full(str(icon_file), title)

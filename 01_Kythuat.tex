@@ -1,0 +1,231 @@
+\section{Kỹ thuật trong chương sách}
+
+\subsection{Các khái niệm}
+\subsubsection{Định nghĩa} 
+Nhận dạng dáng đi (Gait Recognition) là một nhánh trong sinh trắc học thị giác máy tính, nhằm xác thực hoặc định danh một người dựa trên phong cách, đặc điểm vận động khi di chuyển. Lợi thế lớn nhất của nhận dạng dáng đi là nhận diện từ xa, không xâm nhập, không cần đối tượng hợp tác trực tiếp, hiệu quả ngay cả khi đối tượng bị che mặt hoặc quay lưng
+
+\subsubsection{Input} 
+Video RGB thô được tiền xử lý thành các dạng sau:
+\begin{itemize}
+    \item \textbf{Silhouette:} Mặt nạ (mask) tách đối tượng khỏi background (ảnh đen trắng, người là màu trắng, nền là màu đen)
+    \item \textbf{Skeleton/2D-3D Pose:} Tọa độ các khớp xương cơ thể (đầu gối, mắt cá chân, hông, vai...) trích xuất từ các mô hình pose estimation (như HRNet, OpenPose)
+    \item \textbf{SMPL/3D Mesh:} Mô hình lưới không gian 3 chiều tái tạo lại bề mặt cơ thể và chuyển động khớp.
+    \item \textbf{Optical Flow (Dòng quang học):} Vector vận tốc chuyển động của các điểm ảnh theo thời gian.
+\end{itemize}
+    
+\subsubsection{Phương pháp tiếp cận}
+\begin{itemize}
+\item \textbf{Appearance-based (Dựa trên diện mạo/hình ảnh):} Sử dụng trực tiếp chuỗi silhouette hoặc ảnh RGB
+    \begin{itemize}
+        \item Ưu điểm: Giữ lại được thông tin vóc dáng tổng thể, nhịp bước, độ rộng vung tay; độ chính xác thường rất cao nếu điều kiện quan sát ổn định
+        \item Nhược điểm: Dễ bị đánh lừa khi trang phục rộng (áo khoác dài, váy), đeo ba lô cồng kềnh, hoặc thay đổi góc nhìn camera
+    \end{itemize}
+\item \textbf{Model-based (Dựa trên mô hình/khung xương): }Mô hình hóa chuyển động của hệ cơ - xương (khớp, chiều dài xương, quỹ đạo góc gập).
+    \begin{itemize}
+        \item Ưu điểm: Kháng tốt với việc thay đổi trang phục, ba lô, và chuyển đổi góc nhìn
+        \item Nhược điểm: Độ chính xác phụ thuộc hoàn toàn vào chất lượng của thuật toán pose estimation. Nếu video độ phân giải thấp hoặc bị che khuất một phần, các khớp dễ bị định vị sai dẫn đến nhận diện hỏng
+    \end{itemize}
+\end{itemize}
+    
+\subsubsection{Biểu diễn đặc trưng không-thời gian (Spatio-Temporal Representations):} Dữ liệu là video một chuỗi chuyển động tuần hoàn, do đó mô hình cần học cả hình dạng và nhịp điệu vận động
+\begin{itemize}
+    \item \textbf{Không gian (Spatial):} Hình thái học tĩnh của cơ thể: tỷ lệ cơ thể, chiều dài chân, độ rộng vai, độ gù của lưng, vóc dáng.
+    \item \textbf{Thời gian (Temporal):} Động lực học chuyển động: nhịp bước, chu kỳ sải chân, gia tốc vung tay, quỹ đạo chuyển động của các khớp.
+\end{itemize}
+
+Trích xuất đặc trưng Spatio-Temporal là quá trình chuyển đổi một chuỗi khung hình video dạng tensor $T \times H \times W$ (hoặc chuỗi khớp xương $T \times V \times C$) thành một vector đặc trưng duy nhất đại diện cho danh tính người đó
+
+\subsubsection{Các yếu tố gây nhiễu chính:} 
+    \begin{itemize}
+        \item \textbf{Góc nhìn:} Sự thay đổi giữa các góc camera ($0^\circ$ nhìn thẳng, $45^\circ$, $90^\circ$ nhìn ngang). Ví dụ, chuyển động ở góc nhìn ngang thể hiện bước sải rõ nhất, trong khi góc thẳng khó phân biệt hơn.
+        \item \textbf{Trang phục:} Mặc áo khoác rộng, áo mưa, váy dài sẽ làm thay đổi hoàn toàn hình dạng silhouette
+        \item \textbf{Mang vác:} Xách cặp, đeo ba lô, đẩy xe làm thay đổi cả hình dạng bên ngoài lẫn tư thế đi.
+        \item \textbf{Tốc độ \& trạng thái:} Đi nhanh, chậm, chạy, hoặc bề mặt di chuyển gồ ghề/dốc làm nhịp điệu bước chân thay đổi.
+    \end{itemize}
+
+\subsubsection{Khung đánh giá định lượng (Evaluation):} bài toán thường được thiết lập dưới dạng Re-identification (Re-ID) hoặc Retrieval:
+    \begin{itemize}
+        \item \textbf{Gallery set:} Tập cơ sở dữ liệu mẫu đã biết trước danh tính (thường thu thập ở điều kiện bình thường)
+        \item \textbf{Probe (Query) set:} Tập các video cần truy vấn, thường rơi vào các điều kiện khó: đổi trang phục, mang vác túi, hoặc góc quay khác
+        \item \textbf{Metric đo lường:} Thường dùng Rank-1 Accuracy (tỷ lệ danh tính đúng đứng ở vị trí đầu tiên trong danh sách tương đồng được trả về) hoặc mAP (Mean Average Precision)
+    \end{itemize}
+
+\subsection{Các phương pháp nhận dạng dáng đi truyền thống}
+
+\subsubsection{Nhóm phương pháp Appearance-based} 
+Thao tác trực tiếp trên chuỗi silhouette. Mục tiêu là nén hoặc tổng hợp chuỗi khung hình nhị phân thành các vector/ảnh đặc trưng tĩnh mang thông tin chuyển động.
+
+\paragraph{Họ phương pháp biểu diễn mẫu (Template/Energy-based)} 
+
+Thay vì xử lý tuần tự từng khung hình, các kỹ sư tạo ra một ảnh 2D đại diện duy nhất cho toàn bộ chu kỳ bước đi. Mô hình tiêu biểu là GEI (Gait Energy Image)
+
+\begin{itemize}
+    \item Cơ chế: Tính trung bình cộng cường độ điểm ảnh của chuỗi silhouette qua một chu kỳ bước đi hoàn chỉnh
+    \item Đặc tính: Vùng thân giữa giữ nguyên giá trị sáng tối đa (đại diện cho hình thể), vùng chân tay di chuyển có độ mờ xám (đại diện cho tần suất quét chuyển động)
+    \item Biến thể nâng cao:
+    \begin{itemize}
+        \item CGI (Chronological Gait Image): Đánh dấu màu/thang độ xám khác nhau theo thời gian xuất hiện của khung hình để khắc phục việc GEI làm mất thứ tự trước–sau
+        \item GEnI (Gait Entropy Image): Tính toán entropy của từng pixel qua thời gian để lọc ra chính xác các vùng có chuyển động linh hoạt (chân, tay) và loại bỏ vùng tĩnh (thân trên)
+        \item FDEI (Frame Difference Energy Image): Tính toán trên sự sai khác giữa các khung hình liên tiếp để triệt tiêu nhiễu bóng đổ hoặc sai lệch do trang phục quá khổ.
+    \end{itemize} 
+\end{itemize}
+
+\paragraph{Trích xuất đặc trưng hình học \& biến đổi toán học}
+Sau khi có ảnh tổng hợp hoặc chuỗi silhouette, các thuật toán toán học cổ điển được áp dụng để rút gọn số chiều dữ liệu:
+
+\begin{itemize}
+    \item \textbf{Biến đổi Radon và Fourier (Radon Transform / Fourier Descriptors):} Chiếu silhouette theo nhiều góc quét khác nhau hoặc phân tích phổ tần số đường viền để thu được đặc trưng chu kỳ bước đi bất biến với các phép tịnh tiến nhỏ
+    \item \textbf{PCA + LDA (Principal Component Analysis \& Linear Discriminant Analysis):} 
+    \begin{itemize}
+        \item Dùng PCA để giảm chiều không gian ảnh gốc, loại bỏ các pixel dư thừa
+        \item Dùng LDA để tối đa hóa khoảng cách giữa các cá nhân khác nhau (between-class variance) và thu hẹp khoảng cách giữa các mẫu dáng đi của cùng một người (within-class variance)
+    \end{itemize}
+    
+\end{itemize}
+
+\subsubsection{Nhóm phương pháp Model-based (Mô hình hóa hình học cơ thể)} 
+Khôi phục lại cấu trúc cơ học của con người (chiều dài xương, góc xoay của khớp) trước khi đưa vào phân loại
+
+\paragraph{Mô hình hình học đơn giản (Stick Model / Ellipse Fitting)}
+\begin{itemize}
+    \item \textbf{Ý tưởng:} Cơ thể được xấp xỉ bằng các hình học cơ bản: thân là hình chữ nhật, chân tay là các đoạn thẳng nối với nhau (stick figure) hoặc các hình elip lồng ghép (interconnected ellipses)
+    \item \textbf{Đặc trưng:} Theo dõi góc hợp bởi đùi và cẳng chân ($\theta_1, \theta_2$), góc vung tay, hoặc chiều dài sải chân qua từng khung hình.
+    \item \textbf{Hạn chế:} Các phép khớp hình học rất dễ gãy vỡ nếu video có độ phân giải thấp, bóng bị nhiễu hoặc đối tượng mặc quần áo thụng/váy
+\end{itemize}
+
+\paragraph{Mô hình chuỗi Markov ẩn (Hidden Markov Model - HMM)}
+
+\begin{itemize}
+    \item \textbf{Ý tưởng:} Coi chuyển động bước đi là một quá trình ngẫu nhiên gồm các trạng thái rời rạc lặp lại tuần hoàn: Đứng thẳng $\rightarrow$ Chân phải bước lên $\rightarrow$ Chân chạm đất $\rightarrow$ Chân trái bước lên
+    \item \textbf{Cơ chế:} Góc khớp hoặc thông số hình học ở mỗi khung hình được xem là quan sát (observation), còn tư thế cơ thể là trạng thái ẩn (hidden state). Mô hình HMM học ma trận xác suất chuyển trạng thái để phân biệt từng người.
+\end{itemize}
+
+\subsubsection{Phân loại và so khớp đặc trưng (Matching \& Classification)}
+
+Sau khi trích xuất được vector đặc trưng, các bộ phân loại mẫu truyền thống được sử dụng:
+
+\begin{itemize}
+    \item DTW (Dynamic Time Warping): Căn chỉnh hai chuỗi tín hiệu dáng đi có độ dài hoặc tốc độ bước khác nhau theo trục thời gian phi tuyến tính, giúp so khớp chính xác nhịp điệu dù người đi nhanh hay đi chậm
+    \item KNN (K-Nearest Neighbors): Đo khoảng cách hình học đơn giản (khoảng cách Euclid, Mahalanobis) giữa vector đặc trưng query và các mẫu trong cơ sở dữ liệu
+    \item SVM (Support Vector Machine): Phân chia không gian đặc trưng nhiều chiều để phân loại danh tính người đi bộ.
+\end{itemize}
+
+\subsection{Mô tả kiến trúc (theo chương 6)}
+\subsubsection{Đặc điểm của đặc trưng sinh trắc học}
+Một đặc tính thể chất hoặc hành vi được xem xét làm đặc trưng sinh trắc học phải thỏa mãn 7 tiêu chuẩn nền tảng sau:
+\begin{enumerate}
+    \item \textbf{Universality (Tính phổ quát):} Mọi cá thể $i$ trong quần thể mục tiêu $\mathcal{P}$ đều sở hữu đặc trưng này.
+    \item \textbf{Uniqueness (Tính duy nhất):} Với hai cá thể bất kỳ $i \neq j$, sự tương đồng giữa hai mẫu đặc trưng $x_i$ và $x_j$ phải đủ nhỏ để phân biệt.
+    \item \textbf{Permanence (Tính bất biến theo thời gian):} Đặc tính $x_i(t)$ của cá thể $i$ tại thời điểm $t$ không bị biến thiên đáng kể so với thời điểm $t + \Delta t$.
+    \item \textbf{Measurability (Khả năng đo lường):} Thu thập và số hóa dữ liệu thô bằng thiết bị phần cứng chuyên dụng với độ phức tạp tính toán khả thi.
+    \item \textbf{Performance (Hiệu năng):} Độ chính xác nhận dạng đáp ứng ngưỡng chấp nhận với ràng buộc tài nguyên hệ thống.
+    \item \textbf{Acceptability (Tính chấp nhận):} Người dùng sẵn sàng cung cấp dữ liệu sinh trắc học cho hệ thống.
+    \item \textbf{Circumvention (Khả năng chống giả mạo):} Độ phức tạp trong việc giả lập đặc trưng bằng công cụ nhân tạo hoặc kỹ thuật bắt chước.
+\end{enumerate}
+
+\subsubsection{Cơ chế Trích xuất và Mô hình Hóa Đặc trưng}
+Nguyên lý trích xuất đặc trừng của một số phương thức sinh trắc học:
+\paragraph{Nhận diện khuôn mặt (Face Recognition)}
+\begin{itemize}
+    \item \textbf{Phương pháp hình học/cục bộ:} Xác định tập điểm mốc $P = \{p_1, p_2, \dots, p_k\}$ biểu diễn vị trí mắt, mũi, miệng, cằm và các khoảng cách hình học tương đối:
+    \begin{equation}
+        d_{ij} = \| p_i - p_j \|_2
+    \end{equation}
+    \item \textbf{Phương pháp toàn cục (Eigenfaces/PCA):} Biểu diễn ảnh khuôn mặt $I \in \mathbb{R}^{H \times W}$ dưới dạng tổ hợp tuyến tính của $K$ vector cơ sở (canonical faces) $\phi_k$:
+    \begin{equation}
+        I \approx \bar{I} + \sum_{k=1}^K w_k \phi_k, \quad w_k = \phi_k^T (I - \bar{I})
+    \end{equation}
+    trong đó $\bar{I}$ là ảnh khuôn mặt trung bình, và $\phi_k$ là các vector riêng chính trích xuất từ ma trận hiệp phương sai.
+\end{itemize}
+
+\paragraph{Dáng đi (Gait Recognition)}
+Nhận dạng dáng đi cho phép xác thực từ xa qua video giám sát mà không cần sự hợp tác trực tiếp. Quá trình xử lý dựa trên hai biểu diễn:
+\begin{itemize}
+    \item \textbf{Bóng nhị phân (Silhouette Sequence):} Tách mặt nạ người $B_t(x, y) \in \{0, 1\}$ qua thời gian $t = 1, \dots, T$. Đặc trưng tổng hợp không gian - thời gian tiêu biểu là ảnh năng lượng dáng đi (Gait Energy Image - GEI):
+    \begin{equation}
+        G(x, y) = \frac{1}{T} \sum_{t=1}^T B_t(x, y)
+    \end{equation}
+    \item \textbf{Dòng quang học (Optic Flow):} Ước lượng trường vận tốc chuyển động $(u, v)$ tại các điểm ảnh động trên cơ thể theo phương trình ràng buộc dòng quang học:
+    \begin{equation}
+        \frac{\partial I}{\partial x} u + \frac{\partial I}{\partial y} v + \frac{\partial I}{\partial t} = 0
+    \end{equation}
+\end{itemize}
+
+\paragraph{Vân tay (Fingerprint)}
+Mô hình hóa cấu trúc gờ và rãnh (ridge and valley patterns) trên biểu bì ngón tay. Tập đặc trưng cục bộ (minutiae) được định nghĩa bởi bộ ba tọa độ và hướng:
+\begin{equation}
+    M = \{ (x_m, y_m, \theta_m, t_m) \}_{m=1}^M
+\end{equation}
+trong đó $(x_m, y_m)$ là tọa độ, $\theta_m$ là góc hướng của đường gờ, và $t_m \in \{\text{bắt đầu}, \text{rẽ nhánh}\}$ là loại điểm đặc trưng. Hệ thống quy mô lớn (IAFIS) kết hợp thông tin mười ngón (ten-prints).
+
+\paragraph{Mống mắt (Iris Recognition)}
+Mống mắt là vùng hình vành khăn nằm giữa đồng tử và củng mạc. Hệ thống chuẩn hóa tọa độ cực (Daugman Rubber Sheet Model) ánh xạ vùng mống mắt sang tọa độ chữ nhật:
+\begin{equation}
+    I(r, \theta) \rightarrow I(x(r, \theta), y(r, \theta))
+\end{equation}
+Đặc trưng kết cấu pha được lượng tử hóa bằng bộ lọc 2D Gabor:
+\begin{equation}
+    h_{(\text{Re}, \text{Im})} = \text{sgn} \left( \iint I(\rho, \phi) e^{-i \omega (\theta - \phi)} e^{-\left( \frac{(r - \rho)^2}{\alpha^2} + \frac{(\theta - \phi)^2}{\beta^2} \right)} \rho \, d\rho \, d\phi \right)
+\end{equation}
+Khoảng cách Hamming giữa hai mã IrisCode được sử dụng để so khớp:
+\begin{equation}
+    HD = \frac{\| \text{code}_A \oplus \text{code}_B \|_1}{N}
+\end{equation}
+Đồng thời, dao động co giãn tự nhiên của đồng tử (hippus movement) được dùng làm cơ chế liveness detection.
+
+\paragraph{Hình học Bàn tay (Hand Geometry) \& Chỉ tay (Palmprint)}
+\begin{itemize}
+    \item \textbf{Hand geometry:} Vector đặc trưng $v \in \mathbb{R}^d$ bao gồm chiều dài, độ rộng ngón tay tại các đốt, diện tích lòng bàn tay và tỷ lệ hình học.
+    \item \textbf{Palmprint:} Diện tích lớn hơn ngón tay, trích xuất đồng thời các đường chỉ tay chính (principal lines), nếp gấp (wrinkles), và cấu trúc gờ/rãnh tương tự vân tay.
+\end{itemize}
+
+\paragraph{Giọng nói (Voice Recognition)}
+Đặc trưng phân tách thành:
+\begin{itemize}
+    \item \textbf{Thuộc tính thể chất:} Hình học ống dẫn âm, khoang miệng, thanh quản (bất biến tương đối).
+    \item \textbf{Thuộc tính hành vi:} Ngữ điệu, tốc độ phát âm (biến thiên theo cảm xúc, bệnh lý).
+    \item \textbf{Phương thức:} Text-dependent (câu định trước) hoặc Text-independent (nhận diện tự do).
+\end{itemize}
+
+\paragraph{Hành vi Gõ phím (Keystroke) \& Chữ ký (Signature)}
+\begin{itemize}
+    \item \textbf{Keystroke Dynamics:} Ghi nhận thời gian giữ phím (dwell time) $T_{\text{hold}}$ và thời gian chuyển phím (flight time) $T_{\text{flight}}$, cho phép xác thực liên tục (continuous verification):
+    \begin{equation}
+        \mathbf{x}_k = [T_{\text{hold}}^{(1)}, T_{\text{flight}}^{(1, 2)}, T_{\text{hold}}^{(2)}, \dots]^T
+    \end{equation}
+    \item \textbf{On-line Signature:} Ghi nhận chuỗi tín hiệu thời gian thực gồm tọa độ $(x_t, y_t)$, áp lực bút $p_t$, góc nghiêng $(\phi_t, \theta_t)$.
+\end{itemize}
+
+\subsubsection{Mô hình Đánh giá Hiệu năng Định lượng}
+
+Hệ thống xác thực sinh trắc học đưa ra quyết định dựa trên hàm khoảng cách hoặc điểm số tương đồng $s(x, y)$ so với ngưỡng $\eta$:
+\begin{equation}
+    \text{Quyết định} = 
+    \begin{cases}
+        \text{Chấp nhận (Genuine)}, & \text{nếu } s(x, y) \ge \eta \\
+        \text{Từ chối (Impostor)}, & \text{nếu } s(x, y) < \eta
+    \end{cases}
+\end{equation}
+
+Hai thước đo sai số cơ bản:
+\begin{itemize}
+    \item \textbf{False Reject Rate (FRR):} Tỷ lệ hệ thống từ chối sai người dùng hợp lệ:
+    \begin{equation}
+        \text{FRR}(\eta) = \int_{-\infty}^\eta p(s \mid \text{Genuine}) \, ds
+    \end{equation}
+    \item \textbf{False Accept Rate (FAR):} Tỷ lệ hệ thống chấp nhận sai kẻ mạo danh:
+    \begin{equation}
+        \text{FAR}(\eta) = \int_\eta^\infty p(s \mid \text{Impostor}) \, ds
+    \end{equation}
+\end{itemize}
+
+
+
+\subsection{Bối cảnh chương sách}
+
+
+\subsection{Kỹ thuật cốt lõi (baseline)}
+
+
+\subsection{Nguyên lý, các bước thuật toán}
+
