@@ -1,0 +1,18 @@
+Run all unit tests:
+PYTHONPATH=. python3 -m unittest discover -s tests -v
+
+Debug mode:
+Terminal 1:
+PYTHONPATH=. python3 ibus_frontend/main.py
+
+Terminal 2:
+ibus engine multilingual-fasttype
+PYTHONPATH=. python3 gui/tray_icon.py
+
+
+Delete old version & Release:
+rm -rf ~/.config/multilingual-fasttype/icons
+rm -f ~/.config/multilingual-fasttype/settings.json ~/.config/multilingual-fasttype/state.json
+bash install_app.sh
+multilingual-fasttype
+
