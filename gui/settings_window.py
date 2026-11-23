@@ -26,6 +26,9 @@ ALL_PACK_IDS = [
     ("it", "Italiano (ITA)"),
     ("vi_vni", "Tiếng Việt VNI (VNI)"),
     ("vi_telex", "Tiếng Việt Telex (TLX)"),
+    ("zh_pinyin", "Pinyin dấu thanh (PIN)"),
+    ("ru", "Русский — Tiếng Nga (RUS)"),
+    ("ja_hiragana", "日本語 — Hiragana (JPN)"),
 ]
 
 VI_OP_LABELS = [
@@ -41,12 +44,21 @@ VI_OP_LABELS = [
     ("STROKE_D", "Gạch ngang (đ)"),
 ]
 
+PINYIN_OP_LABELS = [
+    ("TONE_1", "Thanh 1 — Ngang (ā)"),
+    ("TONE_2", "Thanh 2 — Sắc (á)"),
+    ("TONE_3", "Thanh 3 — Hỏi/Trắc (ǎ)"),
+    ("TONE_4", "Thanh 4 — Huyền (à)"),
+    ("TONE_CLEAR", "Xóa dấu thanh (a)"),
+    ("MARK_DIAERESIS", "Dấu hai chấm trên u (ü)"),
+]
+
 
 class SettingsWindow(Gtk.Window):
 
     def __init__(self):
         super().__init__(title="Multilingual FastType — Cài đặt")
-        self.set_default_size(760, 560)
+        self.set_default_size(780, 580)
         self.set_border_width(12)
 
         self.manager = PackManager()
@@ -88,11 +100,10 @@ class SettingsWindow(Gtk.Window):
         top_bar.pack_end(btn_reset, False, False, 0)
         vbox.pack_start(top_bar, False, False, 0)
 
-        # Stack chuyển giữa giao diện gói Latin (Mapping) và gói Tiếng Việt (VNI/Telex)
         self.editor_stack = Gtk.Stack()
         vbox.pack_start(self.editor_stack, True, True, 0)
 
-        # --- Trang 1: Giao diện cho FRA, DEU, ESP, ITA ---
+        # --- Trang 1: Giao diện cho GĐ1 (FRA, DEU, ESP, ITA) ---
         paned = Gtk.Paned(orientation=Gtk.Orientation.VERTICAL)
 
         frame_dia = Gtk.Frame(label=" 1. Nhóm dấu kết hợp (Áp dụng cho cả nhóm chữ cái) ")
@@ -174,7 +185,7 @@ class SettingsWindow(Gtk.Window):
         vi_box.pack_start(opt_bar, False, False, 0)
 
         frame_vi = Gtk.Frame(label=" Bảng gán phím 10 phép toán Tiếng Việt (Click vào cột phím để sửa) ")
-        self.vi_store = Gtk.ListStore(str, str, str)  # op_code | label | keys
+        self.vi_store = Gtk.ListStore(str, str, str)
         vi_tree = Gtk.TreeView(model=self.vi_store)
         vi_tree.append_column(Gtk.TreeViewColumn("Phép toán dấu", Gtk.CellRendererText(), text=1))
 
@@ -187,8 +198,92 @@ class SettingsWindow(Gtk.Window):
         scroll_vi.add(vi_tree)
         frame_vi.add(scroll_vi)
         vi_box.pack_start(frame_vi, True, True, 0)
-
         self.editor_stack.add_named(vi_box, "vietnamese")
+
+        # --- Trang 3: Giao diện cho Pinyin dấu thanh (zh_pinyin) ---
+        pin_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+
+        pin_opt_bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=14)
+        self.pin_v_umlaut_chk = Gtk.CheckButton(label="Dùng phím 'v' thay cho 'ü' (vd: nv3 → nǚ)")
+        self.pin_v_umlaut_chk.set_active(True)
+        pin_opt_bar.pack_start(self.pin_v_umlaut_chk, False, False, 0)
+
+        self.pin_restore_chk = Gtk.CheckButton(label="Tự khôi phục từ sai khi nhấn Space/dấu câu")
+        self.pin_restore_chk.set_active(True)
+        pin_opt_bar.pack_start(self.pin_restore_chk, False, False, 0)
+        pin_box.pack_start(pin_opt_bar, False, False, 0)
+
+        frame_pin = Gtk.Frame(label=" Bảng gán phím thanh điệu & dấu Pinyin (Click vào cột phím để sửa) ")
+        self.pin_store = Gtk.ListStore(str, str, str)
+        pin_tree = Gtk.TreeView(model=self.pin_store)
+        pin_tree.append_column(Gtk.TreeViewColumn("Thanh / Dấu Pinyin", Gtk.CellRendererText(), text=1))
+
+        rend_pin_key = Gtk.CellRendererText(editable=True)
+        rend_pin_key.connect("edited", self._on_pin_cell_edited)
+        pin_tree.append_column(Gtk.TreeViewColumn("Phím gõ (cách nhau dấu phẩy)", rend_pin_key, text=2))
+
+        scroll_pin = Gtk.ScrolledWindow()
+        scroll_pin.set_min_content_height(260)
+        scroll_pin.add(pin_tree)
+        frame_pin.add(scroll_pin)
+        pin_box.pack_start(frame_pin, True, True, 0)
+        self.editor_stack.add_named(pin_box, "pinyin")
+
+        # --- Trang 4: Giao diện cho GĐ3 (Tiếng Nga ru & Tiếng Nhật ja_hiragana) ---
+        tr_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+
+        # Thanh tùy chọn động theo từng ngôn ngữ GĐ3
+        self.tr_opt_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+
+        # Tùy chọn riêng của Tiếng Nga: phím dấu trọng âm
+        self.ru_stress_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        self.ru_stress_box.pack_start(Gtk.Label(label="Phím dấu trọng âm (о́):"), False, False, 0)
+        self.ru_stress_entry = Gtk.Entry()
+        self.ru_stress_entry.set_width_chars(4)
+        self.ru_stress_entry.set_max_length(1)
+        self.ru_stress_box.pack_start(self.ru_stress_entry, False, False, 0)
+        self.tr_opt_box.pack_start(self.ru_stress_box, False, False, 0)
+
+        # Tùy chọn riêng của Tiếng Nhật: gấp đôi phụ âm (sokuon)
+        self.ja_sokuon_chk = Gtk.CheckButton(label="Gấp đôi phụ âm tạo xúc âm っ (vd: kka → っか)")
+        self.tr_opt_box.pack_start(self.ja_sokuon_chk, False, False, 0)
+
+        tr_box.pack_start(self.tr_opt_box, False, False, 0)
+
+        frame_tr = Gtk.Frame(label=" Bảng ánh xạ chuyển tự (Ký tự đích ↔ Chuỗi phím Latin) ")
+        box_tr_inner = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+        box_tr_inner.set_border_width(6)
+
+        self.tr_store = Gtk.ListStore(str, str)
+        self.tr_tree = Gtk.TreeView(model=self.tr_store)
+
+        rend_tr_out = Gtk.CellRendererText(editable=True)
+        rend_tr_out.connect("edited", self._on_tr_cell_edited, 0)
+        self.tr_tree.append_column(Gtk.TreeViewColumn("Ký tự đích", rend_tr_out, text=0))
+
+        rend_tr_trig = Gtk.CellRendererText(editable=True)
+        rend_tr_trig.connect("edited", self._on_tr_cell_edited, 1)
+        self.tr_tree.append_column(
+            Gtk.TreeViewColumn("Chuỗi phím Latin (cách nhau dấu phẩy)", rend_tr_trig, text=1)
+        )
+
+        scroll_tr = Gtk.ScrolledWindow()
+        scroll_tr.set_min_content_height(240)
+        scroll_tr.add(self.tr_tree)
+        box_tr_inner.pack_start(scroll_tr, True, True, 0)
+
+        tr_btn_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        btn_tr_add = Gtk.Button(label="+ Thêm quy tắc")
+        btn_tr_add.connect("clicked", self._on_add_tr_rule)
+        btn_tr_del = Gtk.Button(label="- Xóa quy tắc đang chọn")
+        btn_tr_del.connect("clicked", self._on_delete_tr_rule)
+        tr_btn_box.pack_start(btn_tr_add, False, False, 0)
+        tr_btn_box.pack_start(btn_tr_del, False, False, 0)
+        box_tr_inner.pack_start(tr_btn_box, False, False, 0)
+
+        frame_tr.add(box_tr_inner)
+        tr_box.pack_start(frame_tr, True, True, 0)
+        self.editor_stack.add_named(tr_box, "translit")
 
         # Khu vực báo trạng thái / lỗi
         self.status_label = Gtk.Label()
@@ -209,6 +304,10 @@ class SettingsWindow(Gtk.Window):
     def _build_general_tab(self) -> Gtk.Widget:
         vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
         vbox.set_border_width(12)
+
+        scrolled = Gtk.ScrolledWindow()
+        scrolled.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        scrolled.set_min_content_height(320)
 
         grid = Gtk.Grid(column_spacing=16, row_spacing=10)
         grid.attach(Gtk.Label(label="<b>Gói ngôn ngữ</b>", use_markup=True), 0, 0, 1, 1)
@@ -239,13 +338,14 @@ class SettingsWindow(Gtk.Window):
             self.pack_checks[pid] = chk
             self.hotkey_entries[pid] = entry
 
-        vbox.pack_start(grid, False, False, 0)
+        scrolled.add(grid)
+        vbox.pack_start(scrolled, True, True, 0)
 
         self.chk_notify = Gtk.CheckButton(
             label="Hiện thông báo góc màn hình (notify-send) khi chuyển ngôn ngữ"
         )
         self.chk_notify.set_active(self.manager.settings.get("notifications", True))
-        vbox.pack_start(self.chk_notify, False, False, 8)
+        vbox.pack_start(self.chk_notify, False, False, 4)
 
         btn_save_gen = Gtk.Button(label="Lưu cài đặt chung & Phím tắt")
         btn_save_gen.connect("clicked", self._on_save_general)
@@ -257,9 +357,15 @@ class SettingsWindow(Gtk.Window):
 
         return vbox
 
-    # ================= NẠP & XỬ LÝ DỮ LIỆU =================
-    def _is_vi_pack(self, pack_id: str) -> bool:
-        return pack_id.startswith("vi_")
+    # ================= PHÂN LOẠI & NẠP DỮ LIỆU =================
+    def _pack_category(self, pack_id: str) -> str:
+        if pack_id.startswith("vi_"):
+            return "vietnamese"
+        if pack_id == "zh_pinyin":
+            return "pinyin"
+        if pack_id in ("ru", "ja_hiragana"):
+            return "translit"
+        return "mapping"
 
     def _load_pack_into_ui(self, pack_id: str) -> None:
         self.current_pack_id = pack_id
@@ -268,8 +374,9 @@ class SettingsWindow(Gtk.Window):
             self.current_base_data = json.load(f)
 
         merged = self.manager.get_merged_pack_dict(pack_id)
+        cat = self._pack_category(pack_id)
 
-        if self._is_vi_pack(pack_id):
+        if cat == "vietnamese":
             self.editor_stack.set_visible_child_name("vietnamese")
             opts = merged.get("options", {})
             self.vi_tone_combo.set_active_id(opts.get("tone_style", "modern"))
@@ -285,10 +392,49 @@ class SettingsWindow(Gtk.Window):
             for op_code, op_label in VI_OP_LABELS:
                 self.vi_store.append([op_code, op_label, op_to_keys.get(op_code, "")])
 
-            self.status_label.set_markup(
-                "<b><span foreground='#388e3c'>✓ Cấu hình Tiếng Việt sẵn sàng.</span></b>"
-            )
-            self.btn_save_pack.set_sensitive(True)
+            self._validate_current_ui()
+            return
+
+        if cat == "pinyin":
+            self.editor_stack.set_visible_child_name("pinyin")
+            opts = merged.get("options", {})
+            self.pin_v_umlaut_chk.set_active(bool(opts.get("v_as_umlaut", True)))
+            self.pin_restore_chk.set_active(bool(opts.get("restore_invalid", True)))
+
+            bindings = merged.get("bindings", {})
+            op_to_keys = {}
+            if isinstance(bindings, dict):
+                for op, val in bindings.items():
+                    op_to_keys[op] = ", ".join(val) if isinstance(val, list) else str(val)
+
+            self.pin_store.clear()
+            for op_code, op_label in PINYIN_OP_LABELS:
+                self.pin_store.append([op_code, op_label, op_to_keys.get(op_code, "")])
+
+            self._validate_current_ui()
+            return
+
+        if cat == "translit":
+            self.editor_stack.set_visible_child_name("translit")
+            opts = merged.get("options", {})
+
+            if pack_id == "ru":
+                self.ru_stress_box.show_all()
+                self.ja_sokuon_chk.hide()
+                marks = opts.get("combining_marks", {})
+                stress_key = next(iter(marks.keys()), "'") if isinstance(marks, dict) else "'"
+                self.ru_stress_entry.set_text(stress_key)
+            else:
+                self.ru_stress_box.hide()
+                self.ja_sokuon_chk.show()
+                self.ja_sokuon_chk.set_active(bool(opts.get("double_consonant_sokuon", True)))
+
+            self.tr_store.clear()
+            for out, trigs in merged.get("rules", {}).items():
+                t_list = [trigs] if isinstance(trigs, str) else trigs
+                self.tr_store.append([out, ", ".join(t_list)])
+
+            self._validate_current_ui()
             return
 
         self.editor_stack.set_visible_child_name("mapping")
@@ -322,6 +468,14 @@ class SettingsWindow(Gtk.Window):
         self.vi_store[path][2] = new_text.strip()
         self._validate_current_ui()
 
+    def _on_pin_cell_edited(self, _widget, path, new_text: str) -> None:
+        self.pin_store[path][2] = new_text.strip()
+        self._validate_current_ui()
+
+    def _on_tr_cell_edited(self, _widget, path, new_text: str, col: int) -> None:
+        self.tr_store[path][col] = new_text.strip()
+        self._validate_current_ui()
+
     def _on_add_rule(self, _btn) -> None:
         self.rule_store.append(["", ""])
         self._validate_current_ui()
@@ -332,6 +486,28 @@ class SettingsWindow(Gtk.Window):
         if treeiter is not None:
             model.remove(treeiter)
             self._validate_current_ui()
+
+    def _on_add_tr_rule(self, _btn) -> None:
+        self.tr_store.append(["", ""])
+        self._validate_current_ui()
+
+    def _on_delete_tr_rule(self, _btn) -> None:
+        sel = self.tr_tree.get_selection()
+        model, treeiter = sel.get_selected()
+        if treeiter is not None:
+            model.remove(treeiter)
+            self._validate_current_ui()
+
+    def _collect_store_rules(self, store: Gtk.ListStore) -> Dict[str, List[str]]:
+        rules_dict: Dict[str, List[str]] = {}
+        for row in store:
+            out, trigs_str = row[0].strip(), row[1].strip()
+            trigs = [t.strip() for t in trigs_str.split(",") if t.strip()]
+            if out in rules_dict:
+                rules_dict[out].extend(trigs)
+            else:
+                rules_dict[out] = trigs if trigs else [""]
+        return rules_dict
 
     def _collect_mapping_ui(self) -> Tuple[List[dict], Dict[str, List[str]]]:
         diacritics_list: List[dict] = []
@@ -344,20 +520,12 @@ class SettingsWindow(Gtk.Window):
                 "triggers": trigs,
                 "bases": bases,
             })
-
-        rules_dict: Dict[str, List[str]] = {}
-        for row in self.rule_store:
-            out, trigs_str = row[0].strip(), row[1].strip()
-            trigs = [t.strip() for t in trigs_str.split(",") if t.strip()]
-            if out in rules_dict:
-                rules_dict[out].extend(trigs)
-            else:
-                rules_dict[out] = trigs if trigs else [""]
-
-        return diacritics_list, rules_dict
+        return diacritics_list, self._collect_store_rules(self.rule_store)
 
     def _validate_current_ui(self) -> List[ValidationIssue]:
-        if self._is_vi_pack(self.current_pack_id):
+        cat = self._pack_category(self.current_pack_id)
+
+        if cat == "vietnamese":
             seen_keys: Dict[str, str] = {}
             issues: List[ValidationIssue] = []
             for row in self.vi_store:
@@ -374,19 +542,35 @@ class SettingsWindow(Gtk.Window):
                         issues.append(ValidationIssue("C-VI-01", "ERROR", f"Trùng phím '{k}' giữa {seen_keys[k]} và {op_code}"))
                     else:
                         seen_keys[k] = op_code
+            return self._render_validation_status(issues, "Bảng phím Tiếng Việt hợp lệ.")
 
-            if issues:
-                msg = "<b><span foreground='#d32f2f'>LỖI (Không thể lưu):</span></b>\n" + "\n".join(
-                    f"• {e.message}" for e in issues
-                )
-                self.status_label.set_markup(msg)
-                self.btn_save_pack.set_sensitive(False)
-            else:
-                self.status_label.set_markup(
-                    "<b><span foreground='#388e3c'>✓ Bảng phím Tiếng Việt hợp lệ.</span></b>"
-                )
-                self.btn_save_pack.set_sensitive(True)
-            return issues
+        if cat == "pinyin":
+            seen_keys = {}
+            issues = []
+            for row in self.pin_store:
+                op_code, op_label, keys_str = row[0], row[1], row[2]
+                keys = [k.strip().lower() for k in keys_str.split(",") if k.strip()]
+                if not keys:
+                    issues.append(ValidationIssue("C-PIN-03", "ERROR", f"Thiếu phím gõ cho {op_label}"))
+                for k in keys:
+                    if len(k) != 1 or k.isspace():
+                        issues.append(ValidationIssue("C-PIN-04", "ERROR", f"Phím '{k}' của {op_label} phải là 1 ký tự duy nhất"))
+                    elif k in seen_keys:
+                        issues.append(ValidationIssue("C-PIN-01", "ERROR", f"Trùng phím '{k}' giữa {seen_keys[k]} và {op_code}"))
+                    else:
+                        seen_keys[k] = op_code
+            return self._render_validation_status(issues, "Bảng phím Pinyin hợp lệ.")
+
+        if cat == "translit":
+            rules_dict = self._collect_store_rules(self.tr_store)
+            issues = validate_generic_rules(rules_dict)
+            if self.current_pack_id == "ru":
+                s_key = self.ru_stress_entry.get_text().strip()
+                if s_key and any(s_key in trigs for trigs in rules_dict.values()):
+                    issues.append(
+                        ValidationIssue("C-RU-01", "ERROR", f"Phím dấu trọng âm '{s_key}' đang trùng với một quy tắc chữ cái.")
+                    )
+            return self._render_validation_status(issues, "Bảng chuyển tự hợp lệ, không có xung đột.")
 
         diacritics_list, rules_dict = self._collect_mapping_ui()
         combined_rules = expand_diacritics_to_rules(diacritics_list)
@@ -394,6 +578,11 @@ class SettingsWindow(Gtk.Window):
             combined_rules.setdefault(out, []).extend(trigs)
 
         issues = validate_generic_rules(combined_rules)
+        return self._render_validation_status(issues, "Bộ quy tắc hợp lệ, không có xung đột.")
+
+    def _render_validation_status(
+        self, issues: List[ValidationIssue], ok_msg: str
+    ) -> List[ValidationIssue]:
         errors = [i for i in issues if i.level == "ERROR"]
         warnings = [i for i in issues if i.level == "WARNING"]
 
@@ -411,13 +600,15 @@ class SettingsWindow(Gtk.Window):
             self.btn_save_pack.set_sensitive(True)
         else:
             self.status_label.set_markup(
-                "<b><span foreground='#388e3c'>✓ Bộ quy tắc hợp lệ, không có xung đột.</span></b>"
+                f"<b><span foreground='#388e3c'>✓ {ok_msg}</span></b>"
             )
             self.btn_save_pack.set_sensitive(True)
         return issues
 
     def _on_save_pack(self, _btn) -> None:
-        if self._is_vi_pack(self.current_pack_id):
+        cat = self._pack_category(self.current_pack_id)
+
+        if cat == "vietnamese":
             new_bindings: Dict[str, object] = {}
             for row in self.vi_store:
                 op_code, keys_str = row[0], row[2]
@@ -444,6 +635,54 @@ class SettingsWindow(Gtk.Window):
 
             self.status_label.set_markup(
                 f"<b><span foreground='#1976d2'>✓ Đã lưu cấu hình {self.current_pack_id} (IBus tự động cập nhật).</span></b>"
+            )
+            return
+
+        if cat == "pinyin":
+            new_bindings = {}
+            for row in self.pin_store:
+                op_code, keys_str = row[0], row[2]
+                keys = [k.strip() for k in keys_str.split(",") if k.strip()]
+                new_bindings[op_code] = keys if len(keys) > 1 else (keys[0] if keys else "")
+
+            new_options = {
+                "validate": "strict",
+                "restore_invalid": self.pin_restore_chk.get_active(),
+                "v_as_umlaut": self.pin_v_umlaut_chk.get_active(),
+            }
+            self.manager.save_user_override(
+                pack_id=self.current_pack_id,
+                options=new_options,
+                bindings=new_bindings,  # type: ignore
+            )
+            self.status_label.set_markup(
+                f"<b><span foreground='#1976d2'>✓ Đã lưu cấu hình {self.current_pack_id} (IBus tự động cập nhật).</span></b>"
+            )
+            return
+
+        if cat == "translit":
+            rules_dict = self._collect_store_rules(self.tr_store)
+            base_rules = self.current_base_data.get("rules", {})
+            disabled = [out for out in base_rules if out not in rules_dict]
+
+            new_options = dict(self.current_base_data.get("options", {}))
+            if self.current_pack_id == "ru":
+                s_key = self.ru_stress_entry.get_text().strip() or "'"
+                new_options["combining_marks"] = {
+                    s_key: {"combining": "\u0301", "bases": "аеиоуыэюя"}
+                }
+            elif self.current_pack_id == "ja_hiragana":
+                new_options["double_consonant_sokuon"] = self.ja_sokuon_chk.get_active()
+
+            self.manager.save_user_override(
+                pack_id=self.current_pack_id,
+                options=new_options,
+                rules=rules_dict,
+                disable=disabled,
+                upper=self.current_base_data.get("upper", {}),
+            )
+            self.status_label.set_markup(
+                f"<b><span foreground='#1976d2'>✓ Đã lưu ghi đè cho {self.current_pack_id} (IBus tự động cập nhật).</span></b>"
             )
             return
 

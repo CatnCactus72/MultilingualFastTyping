@@ -1,8 +1,7 @@
 # core/engine.py
 from typing import Optional
 import core.composers.mapping  # Đảm bảo MappingComposer đã được đăng ký
-import languages.vi.vi_vni
-import languages.vi.vi_telex
+import core.composers.translit  # Đảm bảo TranslitComposer đã được đăng ký
 from core.composers.base import (
     Action,
     Candidates,

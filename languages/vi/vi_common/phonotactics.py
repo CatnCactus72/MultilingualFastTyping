@@ -3,7 +3,7 @@ from dataclasses import dataclass
 from typing import List, Optional, Tuple
 from languages.vi.vi_common.state import Cell, VOWEL_BASES, ViWordState, compose_cell_char, decompose_vietnamese_char
 from languages.vi.vi_common.syllables import CODAS, INITIALS, ONSET_RIME_MAP, RIME_SET, STOP_CODAS
-
+from core.composers.marks import MarkCell
 
 @dataclass(frozen=True)
 class ParsedSyllable:
@@ -295,3 +295,34 @@ def is_valid_in_progress_state(
             return True
 
     return False
+
+def _to_vi_cells(cells: List[MarkCell]) -> List[Cell]:
+    return [Cell(base=c.base, upper=c.upper, mark=c.mark, locked=c.locked) for c in cells]
+
+
+def select_vi_tone_index(
+    cells: List[MarkCell], tone_style: str = "modern"
+) -> Optional[int]:
+    vi_cells = _to_vi_cells(cells)
+    parsed = parse_cells(vi_cells)
+    return select_tone_index(vi_cells, parsed, tone_style)
+
+
+def is_valid_in_progress_cells(
+    cells: List[MarkCell],
+    tone: Optional[str],
+    strict: bool = True,
+    require_complete: bool = False,
+) -> bool:
+    mode = "strict" if strict else "relaxed"
+    vi_state = ViWordState(cells=_to_vi_cells(cells), tone=tone)
+    if require_complete:
+        return is_valid_complete_syllable(vi_state, mode)
+    return is_valid_in_progress_state(vi_state, mode)
+
+
+def render_vi_cells(
+    cells: List[MarkCell], tone: Optional[str], tone_style: str = "modern"
+) -> str:
+    vi_state = ViWordState(cells=_to_vi_cells(cells), tone=tone)
+    return render_word_state(vi_state, tone_style)

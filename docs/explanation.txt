@@ -1,0 +1,168 @@
+I. Mục tiêu ứng dụng
+
+- Một bộ gõ chỉ cần bàn phím latin, gõ được mọi ngôn ngữ trên thế giới.
+
+- Ý tưởng thuật toán: thay thế ký tự
+    + Thay thế ký tự hoặc nhóm ký tự latin để tạo thành 
+    một chữ cái khác (chữ cái có dấu thanh, chữ cái trong 
+    bảng chữ cái khác latin)
+    + Một số ngôn ngữ như tiếng trung phồn thể, giản thế, 
+    tiếng nhật thì từ một cụm chữ cái đã biến đổi này 
+    (pinyin, hiragana) chuyển đổi thành một dạng khác nữa 
+    (hanzi, kanji)
+
+- Cần gõ ký tự đặc biệt nào, có 2 cách:
+Cách 1: tự gán dấu thanh, vào phần cài đặt, giống như bảng gõ tắt
+Cách 2: tải xuống bộ ngôn ngữ mới vào, gán phím chuyển đổi rồi chạy
+
+2. main.py
+- Linux: dùng IBus, phải đăng ký engine, nhận sự kiện phím từ IBus, trả kết quả về IBus
+- Khi một phím bấm xuống:
+    │
+    ├─ Key release?        → bỏ qua (trả False)
+    ├─ Đang tạm dừng?      → cho qua nguyên (trả False)
+    ├─ Phím modifier?      → bỏ qua (Shift/Ctrl/Alt đơn thuần)
+    ├─ Phím tắt đổi ngôn ngữ? → đổi pack, nuốt phím (trả True)
+    ├─ Có Ctrl/Alt/Super?  → reset buffer, cho qua (trả False)
+    ├─ BackSpace?          → để composer xử lý xóa thông minh
+    ├─ Phím ngắt từ?       → reset buffer, cho qua (Space gửi vào composer)
+    └─ Ký tự in được       → đưa vào thuật toán
+return False   # "Tôi không làm gì, IBus hãy chuyển phím này đến ứng dụng bình thường"
+return True    # "Tôi đã xử lý xong, IBus đừng làm gì thêm"
+
+Ví dụ: gói tiếng Đức, đang có chữ a, gõ thêm số 3 vào:
+OS nhận phím '3'
+  → IBus gọi do_process_key_event(keyval='3', state=0)
+    → _check_sync()           # kiểm tra file có thay đổi không
+    → không phải release
+    → không tạm dừng
+    → không phải modifier
+    → không phải hotkey
+    → không có Ctrl/Alt/Super
+    → không phải BackSpace
+    → không phải phím ngắt
+    → IBus.keyval_to_unicode('3') → ch = '3'
+    → core.process_event(KeyEvent(char='3'))
+        → MappingComposer thấy buffer = 'a3', khớp trigger
+        → trả Replace(delete_n=1, text='ä')
+    → _apply_replacement(1, 'ä')
+        → delete_surrounding_text(-1, 1)   # xóa 'a'
+        → commit_text('ä')                  # chèn 'ä'
+    → trả True (nuốt phím '3')
+
+3. Có phím ký tự Latin vừa mới vào, ký tự này thuộc ngôn ngữ nào?
+
+Ví dụ: a3 là "ä" trong tiếng Đức, cũng có thể trở thành "ả" trong tiếng Việt
+
+Cần biết ngôn ngữ nào đang bật, và ngôn ngữ đó có quy tắc biến đổi thế nào
+
+=> Cần 2 thứ:
+- Dữ liệu từng ngôn ngữ
+- Code xử lý: đọc dữ liệu đó, nhận phím vào, quyết định xuất ra gì. 
+Đây là thuật toán, có thể dùng chung cho nhiều ngôn ngữ cùng kiểu.
+
+=> languages/fr/pack.json và core/composers/mapping.py
+
+4. Giờ đã nhận được phím đầu vào, có file json là bảng ánh xạ ký tự đặc biệt, 
+có thuật toán đọc json và xử lý thay ký tự
+
+Nhưng chuyển ngôn ngữ như thế nào?
+Người dùng đang bật tiếng Pháp, rồi bấm Ctrl+Shift+F2 để chuyển sang tiếng Đức. 
+main.py phải biết: F2 ứng với gói nào, gói đó tên gì, 
+quy tắc của nó nằm ở đâu, và phải nạp lên thay thế gói cũ.
+-> Cần một nơi quản lý: gói nào tồn tại, gói nào đang bật, 
+nạp gói lên khi cần.
+
+- loader.py: làm 2 việc:
+    + Nạp plugin Python của ngôn ngữ vào bộ nhớ 
+    (load_language_plugin), dùng importlib, 
+    chạy một lần lúc khởi động
+    + Hợp nhất dữ liệu từ 3 nguồn (script/latn.json, languages/fr/pack.json, ~/.config/.../overrides/fr.json)
+    thành một LanguagePack hoàn chỉnh 
+    (merge_pack_layers, build_pack_from_dict), chạy mỗi khi cần 
+    đọc một gói
+
+- pack_manager.py: gọi loader.py, quản lý settings.json, state.json, 
+và giữ danh sách tất cả gói đã nạp trong self.packs
+
+- engine.py: Giữ ngôn ngữ đang bật, chọn composer (thuật toán 
+đang chạy cho ngôn ngữ đó), nhận phím. pack_manager chỉ cung cấp
+gói khi được hỏi. Engine mới là nơi quyết định đang dùng gói nào.
+
+5. Thuật toán xử lý thay ký tự tiếng pháp khác, tiếng việt khác, 
+tiếng trung thậm chí còn có 2 thuật toán khác nhau. 
+Nhưng nhiều ngôn ngữ lại có thuật toán xử lý giống nhau, như tiếng pháp và tiếng đức,
+hoặc tiếng việt xử lý giống khá nhiều so với pinyin, hoặc thuật toán viết từ phải qua trái 
+có thể được tận dụng cho cả tiếng ả rập và hebrew. 
+
+Vậy thì làm sao để vừa tận dụng được thuật toán, vừa tách biệt 
+chúng ra, và biết chọn thuật toán nào để xử lý?
+
+-> Tách thuật toán ra khỏi dữ liệu ngôn ngữ, 
+và đặt tên cho từng kiểu thuật toán.
+
+languages/fr/manifest.json  →  "composer": "mapping"
+languages/de/manifest.json  →  "composer": "mapping"
+languages/vi/manifest.json  →  "composer": "vi_vni"
+languages/zh/manifest.json  →  "composer": "pinyin"
+
+Nhưng engine cần gọi composer mà không biết trước có bao nhiêu loại
+Nếu viết theo kiểu: if composer_name == "mapping": composer = ...
+Thì mỗi lần thêm ngôn ngữ mới phải sửa engine.py
+
+=> Cần 1 bảng tra cứu: registry.py
+Tất cả composer phải có cùng giao diện: cùng tên method, cùng kiểu input
+đầu ra chỉ là 1 trong 4 action được định nghĩa sẵn:
+
+class Composer(Protocol):
+    def feed(self, ev: KeyEvent) -> Action: ...
+    def backspace(self) -> Action: ...
+    def reset(self) -> None: ...
+    def render(self) -> str: ...
+
+Thư mục composers/ chứa các thuật toán dùng chung
+Thư mục languages/ chứa phần riêng của từng ngôn ngữ
+
+Ví dụ:
+core/composers/base.py:	Định nghĩa giao diện chung — Composer, KeyEvent, Action
+core/composers/mapping.py: Thuật toán khớp chuỗi — dùng chung cho Pháp, Đức, Nga, Nhật...
+core/composers/marks.py: Thuật toán ghép dấu — dùng chung cho Việt, Pinyin...
+core/registry.py: Bảng tra cứu — tách engine khỏi danh sách cứng các composer
+languages/vi/vi_vni/composer.py: Phần riêng của tiếng Việt VNI — kế thừa BaseMarkComposer
+
+
+6. Quy tắc do người dùng tự đặt ra, nhưng nếu quy tắc xung đột với nhau thì sao
+Chưa kể, mỗi thuật toán lại có một xung đột khác nhau
+
+Ví dụ:
+Hai trigger giống nhau ra hai ký tự khác nhau
+Trigger rỗng ""
+Trigger chứa khoảng trắng, không bao giờ được khớp vì Space là phím ngắt từ
+Thay thế vòng A → B, B → A, người dùng gõ mãi không thoát được
+Trigger này là tiền tố của trigger khác — a3 và a33 cùng tồn tại,
+thuật toán không biết dừng ở đâu
+
+=> Cần một hệ thống kiểm tra mà vừa có phần chung (trùng trigger,
+trigger rỗng...), vừa cho phép mỗi composer tự định nghĩa thêm 
+quy tắc riêng.
+
+=> core/conflicts/ 
+    - framework.py là khung chung
+    - generic_rules.py là các quy tắc áp dụng cho mọi composer, 
+      và mỗi composer có thể implement thêm validate_pack() riêng
+
+7. GUI
+- Biết bộ gõ đang bật ngôn ngữ nào
+- Chuyển sang ngôn ngữ khác
+- Tạm dừng bộ gõ khi cần
+- Chỉnh trigger của một quy tắc
+- Bật/tắt một quy tắc
+- Gõ thử để kiểm tra
+- Thấy ngay có xung đột không khi vừa chỉnh
+
+Thường xuyên (mỗi lần dùng): 1, 2, 3 — phải truy cập nhanh, không mở cửa sổ
+Thỉnh thoảng (khi cài đặt lần đầu hoặc muốn tùy chỉnh): 4, 5, 6, 7 — có thể mở cửa sổ riêng
+
+=> 2 thành phần GUI:
+System Tray: luôn hiện trên thanh taskbar, xử lý việc 1/2/3 mà không cần mở gì thêm
+Settings Window: cửa sổ đầy đủ, xử lý việc 4/5/6/7

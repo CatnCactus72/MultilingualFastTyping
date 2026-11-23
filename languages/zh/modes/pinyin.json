@@ -1,0 +1,17 @@
+{
+  "id": "zh_pinyin",
+  "composer": "zh_pinyin",
+  "options": {
+    "validate": "strict",
+    "restore_invalid": true,
+    "v_as_umlaut": true
+  },
+  "bindings": {
+    "TONE_1": "1",
+    "TONE_2": "2",
+    "TONE_3": "3",
+    "TONE_4": "4",
+    "TONE_CLEAR": "0",
+    "MARK_DIAERESIS": ["v", "6"]
+  }
+}

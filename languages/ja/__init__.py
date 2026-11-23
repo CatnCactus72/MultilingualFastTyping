@@ -1,0 +1,1 @@
+from languages.ja.kana_composer import JaKanaComposer  # noqa: F401

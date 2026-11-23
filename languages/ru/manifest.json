@@ -1,0 +1,12 @@
+{
+  "id": "ru",
+  "name": "Русский",
+  "version": "1.0.0",
+  "script": "cyrl",
+  "composer": "translit",
+  "direction": "ltr",
+  "stage": 3,
+  "badge": { "label": "RUS" },
+  "pack": "pack.json",
+  "schema": 2
+}

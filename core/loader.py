@@ -7,7 +7,42 @@ from core.conflicts.framework import ValidationIssue
 from core.conflicts.generic_rules import validate_generic_rules
 from core.layers.unicode_utils import normalize_text
 from core.registry import get_composer_class
+import importlib.util
+import sys
 
+_LOADED_PLUGINS: set[str] = set()
+
+
+def load_language_plugin(lang_dir: Path, entry_file: str = "__init__.py") -> None:
+    """Nạp động module Python của một gói ngôn ngữ (hỗ trợ cả gói cài sẵn & gói tải thêm)."""
+    entry_path = lang_dir / entry_file
+    if not entry_path.exists():
+        return
+
+    resolved = str(entry_path.resolve())
+    if resolved in _LOADED_PLUGINS:
+        return
+
+    # Đảm bảo thư mục cha của `languages/` nằm trong sys.path để import tương đối hoạt động
+    languages_parent = str(lang_dir.parent.parent.resolve())
+    if languages_parent not in sys.path:
+        sys.path.insert(0, languages_parent)
+
+    module_name = f"languages.{lang_dir.name}"
+    if module_name in sys.modules:
+        _LOADED_PLUGINS.add(resolved)
+        return
+
+    spec = importlib.util.spec_from_file_location(
+        module_name,
+        resolved,
+        submodule_search_locations=[str(lang_dir.resolve())],
+    )
+    if spec and spec.loader:
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[module_name] = module
+        spec.loader.exec_module(module)
+        _LOADED_PLUGINS.add(resolved)
 
 @dataclass
 class LanguagePack:

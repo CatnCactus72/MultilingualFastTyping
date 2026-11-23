@@ -1,0 +1,19 @@
+{
+  "id": "ja",
+  "name": "日本語",
+  "version": "1.0.0",
+  "script": "jpan",
+  "entry": "__init__.py",
+  "direction": "ltr",
+  "stage": 3,
+  "schema": 2,
+  "modes": [
+    {
+      "id": "ja_hiragana",
+      "name": "Tiếng Nhật (Hiragana)",
+      "composer": "ja_kana",
+      "badge": { "label": "JPN" },
+      "pack": "modes/hiragana.json"
+    }
+  ]
+}

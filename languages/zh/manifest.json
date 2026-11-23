@@ -1,0 +1,19 @@
+{
+  "id": "zh",
+  "name": "中文 / Pinyin",
+  "version": "1.0.0",
+  "script": "latn",
+  "entry": "__init__.py",
+  "direction": "ltr",
+  "stage": 2,
+  "schema": 2,
+  "modes": [
+    {
+      "id": "zh_pinyin",
+      "name": "Pinyin dấu thanh",
+      "composer": "zh_pinyin",
+      "badge": { "label": "PIN" },
+      "pack": "modes/pinyin.json"
+    }
+  ]
+}

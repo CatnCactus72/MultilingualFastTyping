@@ -1,0 +1,11 @@
+{
+  "id": "ja_hiragana",
+  "composer": "ja_hiragana",
+  "schema": 2,
+  "options": {
+    "script_mode": "hiragana",
+    "double_consonant_sokuon": true,
+    "n_apostrophe": true,
+    "revert_on_repeat": true
+  }
+}

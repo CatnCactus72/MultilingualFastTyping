@@ -1,21 +1,12 @@
-# languages/vi_vni/composer.py
-from typing import Any, Dict, Optional, Tuple
-from core.composers.base import Action, KeyEvent, Passthrough, Replace
-from core.conflicts.framework import ValidationIssue
+# languages/vi/vi_vni/composer.py
+from typing import Any, Dict, List, Optional
+from core.composers.base import Action, KeyEvent, Passthrough
+from core.composers.marks import BaseMarkComposer, MarkCell, SyllableBuffer
 from core.registry import register_composer
 from languages.vi.vi_common.phonotactics import (
-    is_valid_complete_syllable,
-    is_valid_in_progress_state,
-    parse_cells,
-    render_word_state,
-)
-from languages.vi.vi_common.state import (
-    MAX_WORD_CELLS,
-    OP_TARGETS,
-    TONE_OPS,
-    VOWEL_BASES,
-    Cell,
-    ViWordState,
+    is_valid_in_progress_cells,
+    select_vi_tone_index,
+    render_vi_cells,
 )
 
 DEFAULT_VNI_MAP: Dict[str, str] = {
@@ -31,174 +22,167 @@ DEFAULT_VNI_MAP: Dict[str, str] = {
     "9": "STROKE_D",
 }
 
-WORD_BOUNDARY_CHARS = {
-    " ", "\t", "\n", "\r", ".", ",", ";", ":", "!", "?",
-    "(", ")", "[", "]", "{", "}", "\"", "'"
-}
+TONE_OPS = {"TONE_SAC", "TONE_HUYEN", "TONE_HOI", "TONE_NGA", "TONE_NANG", "TONE_CLEAR"}
 
 
-class ViVniComposer:
-    """Composer Tiếng Việt kiểu VNI (1..5 thanh, 6..8 mũ/móc/trăng, 9 đ, 0 xóa thanh)."""
+class ViVniComposer(BaseMarkComposer):
+    """Bộ gõ Tiếng Việt kiểu VNI kế thừa khung chung BaseMarkComposer."""
 
-    requires_preedit: bool = False
+    MARK_COMBINING = {
+        "MARK_CIRC": "\u0302",   # ^
+        "MARK_HORN": "\u031b",   # ơ, ư
+        "MARK_BREVE": "\u0306",  # ă
+    }
+    TONE_COMBINING = {
+        "TONE_SAC": "\u0301",
+        "TONE_HUYEN": "\u0300",
+        "TONE_HOI": "\u0309",
+        "TONE_NGA": "\u0303",
+        "TONE_NANG": "\u0323",
+    }
+    SPECIAL_CHARS = {
+        ("d", "STROKE_D"): "đ",
+    }
 
     def __init__(self, pack: Any) -> None:
-        self.pack = pack
-        if isinstance(pack, dict):
-            self.options = dict(pack.get("options", {}))
-            raw_bind = pack.get("bindings") or DEFAULT_VNI_MAP
-        else:
-            self.options = dict(getattr(pack, "options", {}) or {})
-            raw_bind = getattr(pack, "bindings", None) or DEFAULT_VNI_MAP
-
+        super().__init__(pack)
         self.tone_style: str = self.options.get("tone_style", "modern")
-        self.validate_mode: str = self.options.get("validate", "strict")
-        self.restore_invalid: bool = bool(self.options.get("restore_invalid", True))
+        self.key_to_op: Dict[str, str] = self._build_key_map()
+        self._last_vni_key: Optional[str] = None
 
-        # Hỗ trợ định dạng {op: key} hoặc {key: op}
-        self.key_to_op: Dict[str, str] = {}
-        if isinstance(raw_bind, dict):
-            for k, v in raw_bind.items():
-                if k in OP_TARGETS:
-                    self.key_to_op[str(v).lower()] = k
-                else:
-                    self.key_to_op[str(k).lower()] = v
-        if not self.key_to_op:
-            self.key_to_op = dict(DEFAULT_VNI_MAP)
-
-        self.state = ViWordState()
-        self.shown: str = ""
-        self._last_key: Optional[str] = None
+    def _build_key_map(self) -> Dict[str, str]:
+        bindings = (
+            self.pack.get("bindings")
+            if isinstance(self.pack, dict)
+            else getattr(self.pack, "bindings", None)
+        )
+        if isinstance(bindings, dict):
+            return {str(v).lower(): k for k, v in bindings.items() if v}
+        return dict(DEFAULT_VNI_MAP)
 
     def reset(self) -> None:
-        self.state.clear()
-        self.shown = ""
-        self._last_key = None
+        super().reset()
+        self._last_vni_key = None
 
-    def render(self) -> str:
-        return render_word_state(self.state, self.tone_style)
+    def select_tone_index(self, syllable: SyllableBuffer) -> Optional[int]:
+        return select_vi_tone_index(syllable.cells, self.tone_style)
 
-    def _diff_action(self, old_shown: str, new_shown: str, typed_char: str) -> Action:
-        if new_shown == old_shown + typed_char:
-            return Passthrough()
-        common = 0
-        limit = min(len(old_shown), len(new_shown))
-        while common < limit and old_shown[common] == new_shown[common]:
-            common += 1
-        return Replace(delete_n=len(old_shown) - common, text=new_shown[common:])
+    def validate_syllable(
+        self, syllable: SyllableBuffer, is_complete: bool = False
+    ) -> bool:
+        if self.validate_mode == "off":
+            return True
+        return is_valid_in_progress_cells(
+            syllable.cells,
+            syllable.tone,
+            strict=(self.validate_mode == "strict"),
+            require_complete=is_complete,
+        )
 
-    def _sync(self, typed_char: str) -> Action:
-        new_shown = render_word_state(self.state, self.tone_style)
-        act = self._diff_action(self.shown, new_shown, typed_char)
-        self.shown = new_shown
-        return act
+    def _insert_char(self, ch: str, is_upper: bool) -> Action:
+        syl = self.state.active_syllable
+        lower = ch.lower()
+        mark: Optional[str] = None
 
-    def backspace(self) -> Action:
-        if not self.state.cells:
-            self.reset()
-            return Passthrough()
-        old_shown = self.shown
-        self.state.cells.pop()
-        if self.state.raw:
-            self.state.raw.pop()
-        self._last_key = None
+        # Tự động đồng bộ ươ khi gõ 'ư' rồi gõ tiếp 'o' (ví dụ t-u-7-o-n-g -> tương)
+        if lower == "o" and syl.cells:
+            prev = syl.cells[-1]
+            if prev.base == "u" and prev.mark == "MARK_HORN" and not prev.locked:
+                mark = "MARK_HORN"
 
-        if not self.state.cells:
-            self.reset()
-            return Passthrough()
+        syl.cells.append(MarkCell(base=lower, upper=is_upper, mark=mark))
+        self.state.raw.append(ch)
+        self._last_vni_key = None
+        return self._sync(ch)
 
-        if not any(c.base in VOWEL_BASES for c in self.state.cells):
-            self.state.tone = None
+    def _apply_op_to_syllable(self, syl: SyllableBuffer, op: str) -> bool:
+        """Áp dụng thử phép toán VNI lên bản sao âm tiết. Trả True nếu thay đổi trạng thái."""
+        if op in TONE_OPS:
+            has_vowel = any(c.base in self.VOWEL_BASES for c in syl.cells)
+            if not has_vowel:
+                return False
+            new_tone = None if op == "TONE_CLEAR" else op
+            if syl.tone == new_tone:
+                return False
+            syl.tone = new_tone
+            return True
 
-        new_shown = render_word_state(self.state, self.tone_style)
-        self.shown = new_shown
-        if old_shown[:-1] == new_shown:
-            return Passthrough()
+        if op == "STROKE_D":
+            for i in range(len(syl.cells) - 1, -1, -1):
+                c = syl.cells[i]
+                if c.base == "d" and not c.locked:
+                    if c.mark == "STROKE_D":
+                        return False
+                    c.mark = "STROKE_D"
+                    return True
+            return False
 
-        common = 0
-        limit = min(len(old_shown), len(new_shown))
-        while common < limit and old_shown[common] == new_shown[common]:
-            common += 1
-        return Replace(delete_n=len(old_shown) - common, text=new_shown[common:])
+        # MARK_CIRC (6), MARK_HORN (7), MARK_BREVE (8)
+        targets = {
+            "MARK_CIRC": {"a", "e", "o"},
+            "MARK_HORN": {"o", "u"},
+            "MARK_BREVE": {"a"},
+        }.get(op, set())
 
-    def _find_uo_indices(self, state: ViWordState) -> Optional[Tuple[int, int]]:
-        parsed = parse_cells(state.cells)
-        nuc = parsed.nucleus_indices
-        for i in range(len(nuc) - 1):
-            if state.cells[nuc[i]].base == "u" and state.cells[nuc[i + 1]].base == "o":
-                return (nuc[i], nuc[i + 1])
-        return None
+        # Ngoại lệ cặp 'uo' + '7' -> gắn đồng thời MARK_HORN cho cả hai (ươ)
+        if op == "MARK_HORN" and len(syl.cells) >= 2:
+            for i in range(len(syl.cells) - 2, -1, -1):
+                c1, c2 = syl.cells[i], syl.cells[i + 1]
+                if (
+                    c1.base == "u"
+                    and c2.base == "o"
+                    and not c1.locked
+                    and not c2.locked
+                ):
+                    if c1.mark == "MARK_HORN" and c2.mark == "MARK_HORN":
+                        return False
+                    c1.mark = "MARK_HORN"
+                    c2.mark = "MARK_HORN"
+                    return True
 
-    def _apply_vni_key(self, ch: str, is_upper: bool) -> Optional[Action]:
-        op = self.key_to_op.get(ch.lower())
-        if not op or not self.state.cells:
-            return None
+        for i in range(len(syl.cells) - 1, -1, -1):
+            c = syl.cells[i]
+            if c.base in targets and not c.locked:
+                if c.mark == op:
+                    return False
+                c.mark = op
+                return True
+        return False
 
-        cells = self.state.cells
-        if op in TONE_OPS or op == "TONE_CLEAR":
-            parsed = parse_cells(cells)
-            if not parsed.nucleus_indices:
-                return None
-            target_indices = [parsed.nucleus_indices[-1]]
+    def _undo_op(self, syl: SyllableBuffer, op: str, ch: str, is_upper: bool) -> Action:
+        """Gõ lặp cùng phím số VNI -> gỡ dấu, khóa ô và chèn phím số thô."""
+        if op in TONE_OPS:
+            syl.tone = None
+            for c in syl.cells:
+                if c.base in self.VOWEL_BASES:
+                    c.locked = True
+        elif op == "STROKE_D":
+            for i in range(len(syl.cells) - 1, -1, -1):
+                if syl.cells[i].base == "d" and syl.cells[i].mark == "STROKE_D":
+                    syl.cells[i].mark = None
+                    syl.cells[i].locked = True
+                    break
         else:
-            target_indices = [
-                i for i in range(len(cells) - 1, -1, -1)
-                if cells[i].base in OP_TARGETS[op] and not cells[i].locked
-            ]
-            if not target_indices:
-                return None
+            for i in range(len(syl.cells) - 1, -1, -1):
+                if syl.cells[i].mark == op:
+                    syl.cells[i].mark = None
+                    syl.cells[i].locked = True
+                    # Nếu đang là cặp 'ươ', gỡ cả hai
+                    if (
+                        op == "MARK_HORN"
+                        and i > 0
+                        and syl.cells[i - 1].base == "u"
+                        and syl.cells[i - 1].mark == "MARK_HORN"
+                    ):
+                        syl.cells[i - 1].mark = None
+                        syl.cells[i - 1].locked = True
+                    break
 
-        for idx in target_indices:
-            target_cell = cells[idx]
-            is_same_tone = op in TONE_OPS and self.state.tone == op and self._last_key == ch.lower()
-            is_same_mark = op in ("MARK_CIRC", "MARK_HORN", "MARK_BREVE", "STROKE_D") and (
-                target_cell.mark == op and self._last_key == ch.lower()
-            )
-
-            # Hoàn tác khi gõ lặp phím VNI (ví dụ a66 -> a6, a11 -> a1)
-            if is_same_tone or is_same_mark:
-                if is_same_tone:
-                    self.state.tone = None
-                else:
-                    uo_pair = self._find_uo_indices(self.state)
-                    if op == "MARK_HORN" and uo_pair and idx in uo_pair:
-                        self.state.cells[uo_pair[0]].mark = None
-                        self.state.cells[uo_pair[1]].mark = None
-                    else:
-                        target_cell.mark = None
-                self.state.cells.append(Cell(base=ch.lower(), upper=is_upper, locked=True))
-                self.state.raw.append(ch)
-                self.state.raw_mode = True
-                self._last_key = None
-                return self._sync(ch)
-
-            cand = self.state.clone()
-            if op in TONE_OPS:
-                cand.tone = op
-            elif op == "TONE_CLEAR":
-                if cand.tone is None:
-                    continue
-                cand.tone = None
-            elif op == "MARK_HORN":
-                uo_pair = self._find_uo_indices(cand)
-                if uo_pair and idx in uo_pair:
-                    cand.cells[uo_pair[0]].mark = "MARK_HORN"
-                    cand.cells[uo_pair[1]].mark = "MARK_HORN"
-                else:
-                    cand.cells[idx].mark = "MARK_HORN"
-            else:
-                cand.cells[idx].mark = op
-
-            if not is_valid_in_progress_state(cand, self.validate_mode):
-                continue
-
-            self.state = cand
-            self.state.raw.append(ch)
-            self.state.has_applied_op = True
-            self._last_key = ch.lower()
-            return self._sync(ch)
-
-        return None
+        syl.cells.append(MarkCell(base=ch.lower(), upper=is_upper, locked=True))
+        self.state.raw.append(ch)
+        self.state.raw_mode = True
+        self._last_vni_key = None
+        return self._sync(ch)
 
     def feed(self, ev: KeyEvent) -> Action:
         if not ev.is_printable or not ev.char or len(ev.char) != 1:
@@ -206,62 +190,46 @@ class ViVniComposer:
             return Passthrough()
 
         ch = ev.char
-        raw_lower = ch.lower()
+        lower = ch.lower()
         is_upper = ev.is_upper or (ch.isalpha() and ch.isupper())
 
-        if ch in WORD_BOUNDARY_CHARS and raw_lower not in self.key_to_op:
-            if (
-                self.restore_invalid
-                and self.state.has_applied_op
-                and not self.state.raw_mode
-                and not is_valid_complete_syllable(self.state, self.validate_mode)
-            ):
-                raw_word = "".join(self.state.raw)
-                old_len = len(self.shown)
-                self.reset()
-                return Replace(delete_n=old_len, text=raw_word + ch)
+        if ch in self.boundary_chars:
+            return self._on_boundary(ch)
+
+        if self.state.total_cells >= self.max_cells:
             self.reset()
             return Passthrough()
 
-        if len(self.state.cells) >= MAX_WORD_CELLS:
-            self.reset()
+        syl = self.state.active_syllable
+        op = self.key_to_op.get(lower)
 
-        if self.state.raw_mode:
-            self.state.cells.append(Cell(base=raw_lower, upper=is_upper, locked=True))
-            self.state.raw.append(ch)
-            return self._sync(ch)
+        # Kiểm tra phím dấu VNI khi chưa bật raw_mode
+        if op and not self.state.raw_mode and syl.cells:
+            # 1. Kiểm tra hoàn tác khi nhấn lặp phím VNI liền trước
+            if self._last_vni_key == lower:
+                return self._undo_op(syl, op, ch, is_upper)
 
-        if raw_lower in self.key_to_op and self.state.cells:
-            act = self._apply_vni_key(ch, is_upper)
-            if act is not None:
-                return act
+            # 2. Thử áp dụng dấu trên bản sao âm tiết và kiểm tra chính tả
+            cand = syl.clone()
+            if self._apply_op_to_syllable(cand, op) and self.validate_syllable(cand):
+                self.state.syllables[-1] = cand
+                self.state.raw.append(ch)
+                self.state.has_applied_op = True
+                self._last_vni_key = lower
+                return self._sync(ch)
 
-        self._last_key = None
+        # Phím chữ cái thông thường
         if ch.isalpha():
-            self.state.cells.append(Cell(base=raw_lower, upper=is_upper))
-            self.state.raw.append(ch)
-            if (
-                raw_lower == "o"
-                and len(self.state.cells) >= 2
-                and self.state.cells[-2].base == "u"
-                and self.state.cells[-2].mark == "MARK_HORN"
-            ):
-                cand = self.state.clone()
-                cand.cells[-1].mark = "MARK_HORN"
-                if is_valid_in_progress_state(cand, self.validate_mode):
-                    self.state = cand
-            return self._sync(ch)
+            return self._insert_char(ch, is_upper)
 
-        self.state.cells.append(Cell(base=raw_lower, upper=is_upper, locked=True))
+        # Số không phải dấu hoặc bị từ chối chính tả -> bật raw_mode
+        syl.cells.append(MarkCell(base=lower, upper=is_upper, locked=True))
         self.state.raw.append(ch)
         self.state.raw_mode = True
+        self._last_vni_key = None
         return self._sync(ch)
 
-    def settings_schema(self) -> dict:
-        return {"type": "vi_vni", "options": ["tone_style", "validate", "restore_invalid"]}
-
-    def validate_pack(self, pack: Any) -> list[ValidationIssue]:
-        return []
-
+    def render_syllable(self, syllable: SyllableBuffer) -> str:
+        return render_vi_cells(syllable.cells, syllable.tone, self.tone_style)
 
 register_composer("vi_vni", ViVniComposer)

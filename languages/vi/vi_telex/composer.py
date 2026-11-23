@@ -1,23 +1,15 @@
-# languages/vi_telex/composer.py
-from typing import Any, Dict, Optional, Tuple
-from core.composers.base import Action, KeyEvent, Passthrough, Replace
-from core.conflicts.framework import ValidationIssue
+# languages/vi/vi_telex/composer.py
+from typing import Any, Dict, Optional
+from core.composers.base import Action, KeyEvent, Passthrough
+from core.composers.marks import BaseMarkComposer, MarkCell, SyllableBuffer
 from core.registry import register_composer
 from languages.vi.vi_common.phonotactics import (
-    is_valid_complete_syllable,
-    is_valid_in_progress_state,
-    parse_cells,
-    render_word_state,
-)
-from languages.vi.vi_common.state import (
-    MAX_WORD_CELLS,
-    TONE_OPS,
-    VOWEL_BASES,
-    Cell,
-    ViWordState,
+    is_valid_in_progress_cells,
+    select_vi_tone_index,
+    render_vi_cells,
 )
 
-TELEX_TONE_KEYS: Dict[str, str] = {
+DEFAULT_TELEX_TONES: Dict[str, str] = {
     "s": "TONE_SAC",
     "f": "TONE_HUYEN",
     "r": "TONE_HOI",
@@ -26,203 +18,135 @@ TELEX_TONE_KEYS: Dict[str, str] = {
     "z": "TONE_CLEAR",
 }
 
-TELEX_REPEAT_MARKS: Dict[str, str] = {
-    "a": "MARK_CIRC",
-    "e": "MARK_CIRC",
-    "o": "MARK_CIRC",
-    "d": "STROKE_D",
-}
+class ViTelexComposer(BaseMarkComposer):
+    """Bộ gõ Tiếng Việt kiểu Telex kế thừa khung chung BaseMarkComposer."""
 
-WORD_BOUNDARY_CHARS = {
-    " ", "\t", "\n", "\r", ".", ",", ";", ":", "!", "?",
-    "(", ")", "[", "]", "{", "}", "\"", "'"
-}
-
-
-class ViTelexComposer:
-    """Composer Tiếng Việt kiểu Telex (s/f/r/x/j/z, aa/ee/oo/dd, w)."""
-
-    requires_preedit: bool = False
+    MARK_COMBINING = {
+        "MARK_CIRC": "\u0302",
+        "MARK_HORN": "\u031b",
+        "MARK_BREVE": "\u0306",
+    }
+    TONE_COMBINING = {
+        "TONE_SAC": "\u0301",
+        "TONE_HUYEN": "\u0300",
+        "TONE_HOI": "\u0309",
+        "TONE_NGA": "\u0303",
+        "TONE_NANG": "\u0323",
+    }
+    SPECIAL_CHARS = {
+        ("d", "STROKE_D"): "đ",
+    }
 
     def __init__(self, pack: Any) -> None:
-        self.pack = pack
-        if isinstance(pack, dict):
-            self.options = dict(pack.get("options", {}))
-        else:
-            self.options = dict(getattr(pack, "options", {}) or {})
-
+        super().__init__(pack)
         self.tone_style: str = self.options.get("tone_style", "modern")
-        self.validate_mode: str = self.options.get("validate", "strict")
-        self.restore_invalid: bool = bool(self.options.get("restore_invalid", True))
-
-        self.state = ViWordState()
-        self.shown: str = ""
-        self._last_trigger: Optional[str] = None
+        self.tone_keys: Dict[str, str] = dict(DEFAULT_TELEX_TONES)
+        self._last_telex_op: Optional[str] = None
 
     def reset(self) -> None:
-        self.state.clear()
-        self.shown = ""
-        self._last_trigger = None
+        super().reset()
+        self._last_telex_op = None
 
-    def render(self) -> str:
-        return render_word_state(self.state, self.tone_style)
+    def select_tone_index(self, syllable: SyllableBuffer) -> Optional[int]:
+        return select_vi_tone_index(syllable.cells, self.tone_style)
 
-    def _diff_action(self, old_shown: str, new_shown: str, typed_char: str) -> Action:
-        if new_shown == old_shown + typed_char:
-            return Passthrough()
-        common = 0
-        limit = min(len(old_shown), len(new_shown))
-        while common < limit and old_shown[common] == new_shown[common]:
-            common += 1
-        return Replace(delete_n=len(old_shown) - common, text=new_shown[common:])
+    def validate_syllable(
+        self, syllable: SyllableBuffer, is_complete: bool = False
+    ) -> bool:
+        if self.validate_mode == "off":
+            return True
+        return is_valid_in_progress_cells(
+            syllable.cells,
+            syllable.tone,
+            strict=(self.validate_mode == "strict"),
+            require_complete=is_complete,
+        )
 
-    def _sync(self, typed_char: str) -> Action:
-        new_shown = render_word_state(self.state, self.tone_style)
-        act = self._diff_action(self.shown, new_shown, typed_char)
-        self.shown = new_shown
-        return act
-
-    def backspace(self) -> Action:
-        if not self.state.cells:
-            self.reset()
-            return Passthrough()
-        old_shown = self.shown
-        self.state.cells.pop()
-        if self.state.raw:
-            self.state.raw.pop()
-        self._last_trigger = None
-
-        if not self.state.cells:
-            self.reset()
-            return Passthrough()
-
-        if not any(c.base in VOWEL_BASES for c in self.state.cells):
-            self.state.tone = None
-
-        new_shown = render_word_state(self.state, self.tone_style)
-        self.shown = new_shown
-        if old_shown[:-1] == new_shown:
-            return Passthrough()
-
-        common = 0
-        limit = min(len(old_shown), len(new_shown))
-        while common < limit and old_shown[common] == new_shown[common]:
-            common += 1
-        return Replace(delete_n=len(old_shown) - common, text=new_shown[common:])
-
-    def _find_uo_indices(self, state: ViWordState) -> Optional[Tuple[int, int]]:
-        parsed = parse_cells(state.cells)
-        nuc = parsed.nucleus_indices
-        for i in range(len(nuc) - 1):
-            if state.cells[nuc[i]].base == "u" and state.cells[nuc[i + 1]].base == "o":
-                return (nuc[i], nuc[i + 1])
-        return None
-
-    def _try_telex_op(self, ch: str, is_upper: bool) -> Optional[Action]:
-        low = ch.lower()
-        cells = self.state.cells
-        if not cells:
+    def _try_telex_mark(self, syl: SyllableBuffer, lower: str) -> Optional[str]:
+        """Thử biến đổi mũ/móc/trăng/đ theo quy tắc Telex trên bản sao `syl`."""
+        # 1. Lặp phụ âm đầu 'dd' -> 'đ'
+        if lower == "d":
+            for i in range(len(syl.cells) - 1, -1, -1):
+                c = syl.cells[i]
+                if c.base == "d" and not c.locked:
+                    if c.mark == "STROKE_D":
+                        return None
+                    c.mark = "STROKE_D"
+                    return "STROKE_D"
             return None
 
-        # 1. Nhóm lặp liền kề: aa -> â, ee -> ê, oo -> ô, dd -> đ
-        if low in TELEX_REPEAT_MARKS:
-            last = cells[-1]
-            expected_mark = TELEX_REPEAT_MARKS[low]
-            if last.base == low and not last.locked:
-                if last.mark == expected_mark:
-                    # Hoàn tác: aaa -> aa, ooo -> oo (khóa ô chữ lặp nhưng giữ âm tiết cho xoong/óoc)
-                    last.mark = None
-                    last.locked = True
-                    self.state.cells.append(Cell(base=low, upper=is_upper, locked=True))
-                    self.state.raw.append(ch)
-                    self._last_trigger = None
-                    return self._sync(ch)
+        # 2. Lặp nguyên âm 'aa', 'ee', 'oo' -> 'â', 'ê', 'ô'
+        if lower in {"a", "e", "o"}:
+            for i in range(len(syl.cells) - 1, -1, -1):
+                c = syl.cells[i]
+                if c.base == lower and not c.locked:
+                    if c.mark == "MARK_CIRC":
+                        return None
+                    c.mark = "MARK_CIRC"
+                    return "MARK_CIRC"
+            return None
 
-                cand = self.state.clone()
-                cand.cells[-1].mark = expected_mark
-                if is_valid_in_progress_state(cand, self.validate_mode):
-                    self.state = cand
-                    self.state.raw.append(ch)
-                    self.state.has_applied_op = True
-                    self._last_trigger = low
-                    return self._sync(ch)
+        # 3. Phím 'w' -> 'ă', 'ơ', 'ư' (ưu tiên cặp 'uo' -> 'ươ')
+        if lower == "w":
+            if len(syl.cells) >= 2:
+                for i in range(len(syl.cells) - 2, -1, -1):
+                    c1, c2 = syl.cells[i], syl.cells[i + 1]
+                    if (
+                        c1.base == "u"
+                        and c2.base == "o"
+                        and not c1.locked
+                        and not c2.locked
+                    ):
+                        if c1.mark == "MARK_HORN" and c2.mark == "MARK_HORN":
+                            return None
+                        c1.mark = "MARK_HORN"
+                        c2.mark = "MARK_HORN"
+                        return "MARK_HORN"
 
-        # 2. Phím 'w': ơ, ư, ươ, ă
-        if low == "w":
-            uo_pair = self._find_uo_indices(self.state)
-            if uo_pair:
-                u_idx, o_idx = uo_pair
-                if cells[u_idx].mark == "MARK_HORN" or cells[o_idx].mark == "MARK_HORN":
-                    if self._last_trigger == "w":
-                        cells[u_idx].mark = None
-                        cells[o_idx].mark = None
-                        self.state.cells.append(Cell(base="w", upper=is_upper, locked=True))
-                        self.state.raw.append(ch)
-                        self.state.raw_mode = True
-                        self._last_trigger = None
-                        return self._sync(ch)
-                cand = self.state.clone()
-                cand.cells[u_idx].mark = "MARK_HORN"
-                cand.cells[o_idx].mark = "MARK_HORN"
-                if is_valid_in_progress_state(cand, self.validate_mode):
-                    self.state = cand
-                    self.state.raw.append(ch)
-                    self.state.has_applied_op = True
-                    self._last_trigger = "w"
-                    return self._sync(ch)
-
-            for i in range(len(cells) - 1, -1, -1):
-                c = cells[i]
-                if c.locked or c.base not in ("a", "o", "u"):
-                    continue
-                target_mark = "MARK_BREVE" if c.base == "a" else "MARK_HORN"
-                if c.mark == target_mark and self._last_trigger == "w":
-                    c.mark = None
-                    self.state.cells.append(Cell(base="w", upper=is_upper, locked=True))
-                    self.state.raw.append(ch)
-                    self.state.raw_mode = True
-                    self._last_trigger = None
-                    return self._sync(ch)
-
-                cand = self.state.clone()
-                cand.cells[i].mark = target_mark
-                if is_valid_in_progress_state(cand, self.validate_mode):
-                    self.state = cand
-                    self.state.raw.append(ch)
-                    self.state.has_applied_op = True
-                    self._last_trigger = "w"
-                    return self._sync(ch)
-
-        # 3. Nhóm dấu thanh: s, f, r, x, j, z
-        if low in TELEX_TONE_KEYS:
-            parsed = parse_cells(cells)
-            if not parsed.nucleus_indices:
-                return None
-            op = TELEX_TONE_KEYS[low]
-            if op in TONE_OPS and self.state.tone == op and self._last_trigger == low:
-                self.state.tone = None
-                self.state.cells.append(Cell(base=low, upper=is_upper, locked=True))
-                self.state.raw.append(ch)
-                self.state.raw_mode = True
-                self._last_trigger = None
-                return self._sync(ch)
-
-            cand = self.state.clone()
-            if op == "TONE_CLEAR":
-                if cand.tone is None:
-                    return None
-                cand.tone = None
-            else:
-                cand.tone = op
-
-            if is_valid_in_progress_state(cand, self.validate_mode):
-                self.state = cand
-                self.state.raw.append(ch)
-                self.state.has_applied_op = True
-                self._last_trigger = low
-                return self._sync(ch)
-
+            for i in range(len(syl.cells) - 1, -1, -1):
+                c = syl.cells[i]
+                if c.base in {"a", "o", "u"} and not c.locked:
+                    target_mark = "MARK_BREVE" if c.base == "a" else "MARK_HORN"
+                    if c.mark == target_mark:
+                        return None
+                    c.mark = target_mark
+                    return target_mark
         return None
+
+    def _undo_telex(self, syl: SyllableBuffer, ch: str, is_upper: bool) -> Action:
+        """Gõ lặp phím dấu Telex -> hoàn tác về chữ thường + khóa ô (ví dụ ooo -> oo cho xoong)."""
+        op = self._last_telex_op
+        if op and op.startswith("TONE_"):
+            syl.tone = None
+            for c in syl.cells:
+                if c.base in self.VOWEL_BASES:
+                    c.locked = True
+            self.state.raw_mode = True
+        elif op == "STROKE_D":
+            for i in range(len(syl.cells) - 1, -1, -1):
+                if syl.cells[i].base == "d" and syl.cells[i].mark == "STROKE_D":
+                    syl.cells[i].mark = None
+                    syl.cells[i].locked = True
+                    break
+        elif op:
+            for i in range(len(syl.cells) - 1, -1, -1):
+                if syl.cells[i].mark == op:
+                    syl.cells[i].mark = None
+                    syl.cells[i].locked = True
+                    if (
+                        op == "MARK_HORN"
+                        and i > 0
+                        and syl.cells[i - 1].base == "u"
+                        and syl.cells[i - 1].mark == "MARK_HORN"
+                    ):
+                        syl.cells[i - 1].mark = None
+                        syl.cells[i - 1].locked = True
+                    break
+
+        syl.cells.append(MarkCell(base=ch.lower(), upper=is_upper, locked=True))
+        self.state.raw.append(ch)
+        self._last_telex_op = None
+        return self._sync(ch)
 
     def feed(self, ev: KeyEvent) -> Action:
         if not ev.is_printable or not ev.char or len(ev.char) != 1:
@@ -230,63 +154,75 @@ class ViTelexComposer:
             return Passthrough()
 
         ch = ev.char
-        raw_lower = ch.lower()
+        lower = ch.lower()
         is_upper = ev.is_upper or (ch.isalpha() and ch.isupper())
 
-        if ch in WORD_BOUNDARY_CHARS:
-            if (
-                self.restore_invalid
-                and self.state.has_applied_op
-                and not self.state.raw_mode
-                and not is_valid_complete_syllable(self.state, self.validate_mode)
-            ):
-                raw_word = "".join(self.state.raw)
-                old_len = len(self.shown)
-                self.reset()
-                return Replace(delete_n=old_len, text=raw_word + ch)
+        if ch in self.boundary_chars:
+            return self._on_boundary(ch)
+
+        if self.state.total_cells >= self.max_cells:
             self.reset()
             return Passthrough()
 
-        if len(self.state.cells) >= MAX_WORD_CELLS:
-            self.reset()
+        syl = self.state.active_syllable
 
-        if self.state.raw_mode:
-            self.state.cells.append(Cell(base=raw_lower, upper=is_upper, locked=True))
-            self.state.raw.append(ch)
-            return self._sync(ch)
-
-        if self.state.cells:
-            act = self._try_telex_op(ch, is_upper)
-            if act is not None:
-                return act
-
-        self._last_trigger = None
-        if ch.isalpha():
-            self.state.cells.append(Cell(base=raw_lower, upper=is_upper))
-            self.state.raw.append(ch)
-            # Trường hợp gõ 'u' + 'w' -> 'ư', sau đó gõ tiếp 'o' -> tự đồng bộ thành 'ươ'
+        if ch.isalpha() and not self.state.raw_mode and syl.cells:
+            # 1. Hoàn tác nếu lặp phím dấu ngay sau khi biến đổi (aa->â, aaa->aa; ooo->oo)
             if (
-                raw_lower == "o"
-                and len(self.state.cells) >= 2
-                and self.state.cells[-2].base == "u"
-                and self.state.cells[-2].mark == "MARK_HORN"
+                self._last_telex_op is not None
+                and self.state.raw
+                and self.state.raw[-1].lower() == lower
             ):
-                cand = self.state.clone()
-                cand.cells[-1].mark = "MARK_HORN"
-                if is_valid_in_progress_state(cand, self.validate_mode):
-                    self.state = cand
+                return self._undo_telex(syl, ch, is_upper)
+
+            # 2. Thử dấu thanh Telex (s, f, r, x, j, z)
+            if lower in self.tone_keys:
+                tone_op = self.tone_keys[lower]
+                new_tone = None if tone_op == "TONE_CLEAR" else tone_op
+                if syl.tone != new_tone and any(
+                    c.base in self.VOWEL_BASES for c in syl.cells
+                ):
+                    cand = syl.clone()
+                    cand.tone = new_tone
+                    if self.validate_syllable(cand):
+                        self.state.syllables[-1] = cand
+                        self.state.raw.append(ch)
+                        self.state.has_applied_op = True
+                        self._last_telex_op = tone_op
+                        return self._sync(ch)
+
+            # 3. Thử dấu chữ Telex (aa, ee, oo, dd, w)
+            if lower in {"a", "e", "o", "d", "w"}:
+                cand = syl.clone()
+                applied = self._try_telex_mark(cand, lower)
+                if applied and self.validate_syllable(cand):
+                    self.state.syllables[-1] = cand
+                    self.state.raw.append(ch)
+                    self.state.has_applied_op = True
+                    self._last_telex_op = applied
+                    return self._sync(ch)
+
+        # Chèn chữ cái thường (tự đồng bộ 'ư' + 'o' -> 'ươ')
+        if ch.isalpha():
+            mark: Optional[str] = None
+            if lower == "o" and syl.cells:
+                prev = syl.cells[-1]
+                if prev.base == "u" and prev.mark == "MARK_HORN" and not prev.locked:
+                    mark = "MARK_HORN"
+            syl.cells.append(MarkCell(base=lower, upper=is_upper, mark=mark))
+            self.state.raw.append(ch)
+            self._last_telex_op = None
             return self._sync(ch)
 
-        self.state.cells.append(Cell(base=raw_lower, upper=is_upper, locked=True))
+        # Ký tự số / ký hiệu không phải dấu -> bật raw_mode
+        syl.cells.append(MarkCell(base=lower, upper=is_upper, locked=True))
         self.state.raw.append(ch)
         self.state.raw_mode = True
+        self._last_telex_op = None
         return self._sync(ch)
-
-    def settings_schema(self) -> dict:
-        return {"type": "vi_telex", "options": ["tone_style", "validate", "restore_invalid"]}
-
-    def validate_pack(self, pack: Any) -> list[ValidationIssue]:
-        return []
+    
+    def render_syllable(self, syllable: SyllableBuffer) -> str:
+        return render_vi_cells(syllable.cells, syllable.tone, self.tone_style)
 
 
 register_composer("vi_telex", ViTelexComposer)

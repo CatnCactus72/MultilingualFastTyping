@@ -1,0 +1,1 @@
+from languages.zh.pinyin_composer import PinyinMarkComposer  # noqa: F401

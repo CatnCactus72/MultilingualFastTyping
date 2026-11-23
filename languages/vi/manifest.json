@@ -1,0 +1,26 @@
+{
+  "id": "vi",
+  "name": "Tiếng Việt",
+  "version": "1.0.0",
+  "script": "latn",
+  "entry": "__init__.py",
+  "direction": "ltr",
+  "stage": 2,
+  "schema": 2,
+  "modes": [
+    {
+      "id": "vi_vni",
+      "name": "Tiếng Việt (VNI)",
+      "composer": "vi_vni",
+      "badge": { "label": "VNI" },
+      "pack": "vi_vni/pack.json"
+    },
+    {
+      "id": "vi_telex",
+      "name": "Tiếng Việt (Telex)",
+      "composer": "vi_telex",
+      "badge": { "label": "TLX" },
+      "pack": "vi_telex/pack.json"
+    }
+  ]
+}

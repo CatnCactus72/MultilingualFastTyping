@@ -3,31 +3,23 @@ import json
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from core.conflicts.framework import ValidationIssue
-from core.loader import LanguagePack, load_pack_files
+from core.loader import LanguagePack, load_language_plugin, load_pack_files
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_LANGUAGES_DIR = PROJECT_ROOT / "languages"
 DEFAULT_SCRIPTS_DIR = PROJECT_ROOT / "scripts"
-DEFAULT_PACKS_DIR = DEFAULT_LANGUAGES_DIR  # Alias giữ tương thích ngược với test_m1_packs.py
+DEFAULT_PACKS_DIR = DEFAULT_LANGUAGES_DIR
 DEFAULT_CONFIG_DIR = Path.home() / ".config" / "multilingual-fasttype"
+USER_LANGUAGES_DIR = Path.home() / ".local" / "share" / "multilingual-fasttype" / "languages"
 
 DEFAULT_BADGE_COLOR = "#1565c0"
-
-DEFAULT_BADGE_COLOR = "#1565c0"
-
-PACK_COLORS = {
-    "ENG": DEFAULT_BADGE_COLOR,
-    "PAUSED": DEFAULT_BADGE_COLOR,
-    "fr": DEFAULT_BADGE_COLOR,
-    "de": DEFAULT_BADGE_COLOR,
-    "es": DEFAULT_BADGE_COLOR,
-    "it": DEFAULT_BADGE_COLOR,
-    "vi_vni": DEFAULT_BADGE_COLOR,
-    "vi_telex": DEFAULT_BADGE_COLOR,
-}
 
 DEFAULT_SETTINGS = {
-    "enabled_packs": ["fr", "de", "es", "it", "vi_vni", "vi_telex"],
+    "enabled_packs": [
+        "fr", "de", "es", "it",
+        "vi_vni", "vi_telex",
+        "zh_pinyin", "ru", "ja_hiragana",
+    ],
     "hotkeys": {
         "Ctrl+Shift+F1": "fr",
         "Ctrl+Shift+F2": "de",
@@ -35,10 +27,12 @@ DEFAULT_SETTINGS = {
         "Ctrl+Shift+F4": "it",
         "Ctrl+Shift+F5": "vi_vni",
         "Ctrl+Shift+F6": "vi_telex",
+        "Ctrl+Shift+F7": "zh_pinyin",
+        "Ctrl+Shift+F8": "ru",
+        "Ctrl+Shift+F9": "ja_hiragana",
     },
     "notifications": True,
 }
-
 
 class PackManager:
     def __init__(
@@ -46,16 +40,79 @@ class PackManager:
         packs_dir: Path = DEFAULT_LANGUAGES_DIR,
         config_dir: Path = DEFAULT_CONFIG_DIR,
         scripts_dir: Path = DEFAULT_SCRIPTS_DIR,
+        user_packs_dir: Optional[Path] = USER_LANGUAGES_DIR,
     ) -> None:
         self.packs_dir = Path(packs_dir)
+        self.user_packs_dir = Path(user_packs_dir) if user_packs_dir else None
         self.scripts_dir = Path(scripts_dir)
         self.config_dir = Path(config_dir)
         self.overrides_dir = self.config_dir / "overrides"
         self.legacy_user_dir = self.config_dir / "user"
         self.settings_path = self.config_dir / "settings.json"
+
         self.packs: Dict[str, LanguagePack] = {}
         self.issues: Dict[str, List[ValidationIssue]] = {}
         self.settings: Dict[str, Any] = {}
+        # Ánh xạ mode_id -> (lang_dir, manifest_dict_cho_mode)
+        self._mode_index: Dict[str, Tuple[Path, Dict[str, Any]]] = {}
+
+    def _language_search_dirs(self) -> List[Path]:
+        dirs = [self.packs_dir]
+        if self.user_packs_dir and self.user_packs_dir != self.packs_dir:
+            dirs.append(self.user_packs_dir)
+        return dirs
+
+    def discover_modes(self) -> Dict[str, Tuple[Path, Dict[str, Any]]]:
+        """Quét tất cả thư mục ngôn ngữ cài sẵn & cài thêm, nạp plugin và lập chỉ mục các mode."""
+        self._mode_index.clear()
+        for base_dir in self._language_search_dirs():
+            if not base_dir.is_dir():
+                continue
+            for lang_dir in sorted(base_dir.iterdir()):
+                if not lang_dir.is_dir() or lang_dir.name.startswith((".", "_")):
+                    continue
+                manifest_path = lang_dir / "manifest.json"
+                if not manifest_path.exists():
+                    continue
+
+                with open(manifest_path, "r", encoding="utf-8") as f:
+                    manifest = json.load(f)
+
+                # Nạp động plugin Python của ngôn ngữ nếu có
+                entry_file = manifest.get("entry", "__init__.py")
+                load_language_plugin(lang_dir, entry_file)
+
+                if "modes" in manifest and isinstance(manifest["modes"], list):
+                    for mode in manifest["modes"]:
+                        mode_id = mode["id"]
+                        merged_manifest = {
+                            "id": mode_id,
+                            "name": mode.get("name", manifest.get("name", mode_id)),
+                            "script": mode.get("script", manifest.get("script", "latn")),
+                            "composer": mode.get("composer", manifest.get("composer", "mapping")),
+                            "direction": mode.get("direction", manifest.get("direction", "ltr")),
+                            "stage": mode.get("stage", manifest.get("stage", 1)),
+                            "badge": mode.get("badge", manifest.get("badge", {"label": mode_id.upper()[:3]})),
+                            "pack": mode.get("pack", "pack.json"),
+                            "schema": manifest.get("schema", 2),
+                        }
+                        self._mode_index[mode_id] = (lang_dir, merged_manifest)
+                else:
+                    mode_id = manifest.get("id", lang_dir.name)
+                    self._mode_index[mode_id] = (lang_dir, manifest)
+
+        return self._mode_index
+
+    def list_available_packs(self) -> List[Tuple[str, str]]:
+        """Trả về danh sách [(mode_id, 'Tên hiển thị (BADGE)')] cho GUI."""
+        if not self._mode_index:
+            self.discover_modes()
+        result: List[Tuple[str, str]] = []
+        for mode_id, (_, m) in self._mode_index.items():
+            badge = m.get("badge", {})
+            label = badge.get("label", mode_id.upper()[:3]) if isinstance(badge, dict) else str(badge)
+            result.append((mode_id, f"{m.get('name', mode_id)} ({label})"))
+        return result
 
     def ensure_config_dirs(self) -> None:
         self.overrides_dir.mkdir(parents=True, exist_ok=True)
@@ -77,26 +134,32 @@ class PackManager:
 
     def _resolve_pack_paths(
         self, pack_id: str
-    ) -> Tuple[Path, Optional[Path], Optional[Path], Optional[Path]]:
-        lang_dir = self.packs_dir / pack_id
-        if not lang_dir.is_dir() and pack_id.startswith("vi_"):
-            lang_dir = self.packs_dir / "vi" / pack_id
+    ) -> Tuple[Path, Optional[Dict[str, Any]], Optional[Path], Optional[Path]]:
+        if not self._mode_index:
+            self.discover_modes()
 
-        if lang_dir.is_dir():
-            manifest_path = lang_dir / "manifest.json"
-            pack_name = "pack.json"
-            script_id = "latn"
-            if manifest_path.exists():
-                with open(manifest_path, "r", encoding="utf-8") as f:
-                    m_data = json.load(f)
-                pack_name = m_data.get("pack", "pack.json")
-                script_id = m_data.get("script", "latn")
-            base_path = lang_dir / pack_name
+        if pack_id in self._mode_index:
+            lang_dir, manifest_dict = self._mode_index[pack_id]
+            base_path = lang_dir / manifest_dict.get("pack", "pack.json")
+            script_id = manifest_dict.get("script", "latn")
             script_path = self.scripts_dir / f"{script_id}.json"
         else:
-            base_path = self.packs_dir / f"{pack_id}.json"
-            manifest_path = None
-            script_path = self.scripts_dir / "latn.json"
+            # Fallback cho thư mục con cũ hoặc file phẳng
+            lang_dir = self.packs_dir / pack_id
+            if not lang_dir.is_dir() and pack_id.startswith("vi_"):
+                lang_dir = self.packs_dir / "vi" / pack_id
+            if lang_dir.is_dir():
+                load_language_plugin(lang_dir.parent if lang_dir.parent.name == "vi" else lang_dir)
+                m_file = lang_dir / "manifest.json"
+                manifest_dict = json.loads(m_file.read_text(encoding="utf-8")) if m_file.exists() else None
+                pack_name = (manifest_dict or {}).get("pack", "pack.json")
+                script_id = (manifest_dict or {}).get("script", "latn")
+                base_path = lang_dir / pack_name
+                script_path = self.scripts_dir / f"{script_id}.json"
+            else:
+                base_path = self.packs_dir / f"{pack_id}.json"
+                manifest_dict = None
+                script_path = self.scripts_dir / "latn.json"
 
         override_path = self.overrides_dir / f"{pack_id}.json"
         if not override_path.exists():
@@ -104,29 +167,45 @@ class PackManager:
             if legacy_path.exists():
                 override_path = legacy_path
 
-        return base_path, manifest_path, script_path, override_path
-    
+        return base_path, manifest_dict, script_path, override_path
+
     def load_pack(
         self, pack_id: str
     ) -> Tuple[LanguagePack, List[ValidationIssue]]:
-        base_path, manifest_path, script_path, override_path = self._resolve_pack_paths(pack_id)
-        pack, pack_issues = load_pack_files(
-            base_path=base_path,
-            override_path=override_path if override_path and override_path.exists() else None,
-            manifest_path=manifest_path if manifest_path and manifest_path.exists() else None,
-            script_path=script_path if script_path and script_path.exists() else None,
+        base_path, manifest_dict, script_path, override_path = self._resolve_pack_paths(pack_id)
+        # Ghi tạm manifest_dict qua build_pack_from_dict hoặc file manifest
+        from core.loader import build_pack_from_dict
+
+        with open(base_path, "r", encoding="utf-8") as f:
+            pack_data = json.load(f)
+        script_data = None
+        if script_path and script_path.exists():
+            with open(script_path, "r", encoding="utf-8") as f:
+                script_data = json.load(f)
+        override_data = None
+        if override_path and override_path.exists():
+            with open(override_path, "r", encoding="utf-8") as f:
+                override_data = json.load(f)
+
+        pack, pack_issues = build_pack_from_dict(
+            data=pack_data,
+            override_data=override_data,
+            script_data=script_data,
+            manifest_data=manifest_dict,
         )
         self.packs[pack_id] = pack
         self.issues[pack_id] = pack_issues
         return pack, pack_issues
 
     def load_enabled_packs(self) -> Dict[str, LanguagePack]:
+        self.discover_modes()
         if not self.settings:
             self.load_settings()
         self.packs.clear()
         self.issues.clear()
         for pack_id in self.settings.get("enabled_packs", []):
-            self.load_pack(pack_id)
+            if pack_id in self._mode_index or (self.packs_dir / pack_id).exists() or (self.packs_dir / "vi" / pack_id).exists():
+                self.load_pack(pack_id)
         return self.packs
 
     def save_user_override(
@@ -137,7 +216,7 @@ class PackManager:
         upper: Optional[Dict[str, str]] = None,
         diacritics: Optional[List[Dict[str, Any]]] = None,
         options: Optional[Dict[str, Any]] = None,
-        bindings: Optional[List[Dict[str, Any]]] = None,
+        bindings: Optional[Any] = None,
     ) -> Tuple[LanguagePack, List[ValidationIssue]]:
         self.ensure_config_dirs()
         override_data: Dict[str, Any] = {
@@ -158,17 +237,16 @@ class PackManager:
         return self.load_pack(pack_id)
 
     def get_merged_pack_dict(self, pack_id: str) -> Dict[str, Any]:
-        base_path, manifest_path, _, override_path = self._resolve_pack_paths(pack_id)
+        base_path, m_data, _, override_path = self._resolve_pack_paths(pack_id)
         with open(base_path, "r", encoding="utf-8") as f:
             data = json.load(f)
-        if manifest_path and manifest_path.exists():
-            with open(manifest_path, "r", encoding="utf-8") as f:
-                m_data = json.load(f)
+        if m_data:
             data.setdefault("meta", {})
             data["meta"]["id"] = m_data.get("id", pack_id)
             data["meta"]["name"] = m_data.get("name", pack_id)
-            data["meta"]["symbol"] = m_data.get("badge", {}).get("label", pack_id.upper())
-            data["badge"] = m_data.get("badge", {})
+            badge = m_data.get("badge", {})
+            data["meta"]["symbol"] = badge.get("label", pack_id.upper()[:3]) if isinstance(badge, dict) else str(badge)
+            data["badge"] = badge
             data["composer"] = m_data.get("composer", "mapping")
 
         if override_path and override_path.exists():
@@ -197,6 +275,8 @@ class PackManager:
                 ov_path.unlink()
         return self.load_pack(pack_id)
 
+    # --- Đồng bộ trạng thái & Tự khởi động ---
+
     @property
     def state_path(self) -> Path:
         return self.config_dir / "state.json"
@@ -206,7 +286,6 @@ class PackManager:
         return Path.home() / ".config" / "autostart" / "multilingual-fasttype.desktop"
 
     def load_state(self) -> dict:
-        """Đọc trạng thái hiện tại: active_pack (None hoặc mã gói) và paused (bool)."""
         self.ensure_config_dirs()
         if not self.state_path.exists():
             default_state = {"active_pack": None, "paused": False}
@@ -219,7 +298,6 @@ class PackManager:
             return {"active_pack": None, "paused": False}
 
     def save_state(self, state_data: dict) -> None:
-        """Lưu trạng thái để đồng bộ tức thời giữa IBus Engine và System Tray[cite: 1]."""
         self.ensure_config_dirs()
         with open(self.state_path, "w", encoding="utf-8") as f:
             json.dump(state_data, f, ensure_ascii=False)
@@ -228,7 +306,6 @@ class PackManager:
         return self.autostart_path.exists()
 
     def set_autostart(self, enabled: bool, _tray_script_path: Optional[Path] = None) -> None:
-        """Bật/tắt tự khởi động cùng hệ thống qua chuẩn XDG Autostart (FR-14)[cite: 1, 4]."""
         self.autostart_path.parent.mkdir(parents=True, exist_ok=True)
         if enabled:
             content = (
